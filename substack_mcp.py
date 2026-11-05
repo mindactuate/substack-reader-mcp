@@ -26,6 +26,7 @@ import asyncio
 import datetime as dt
 import hmac
 import json
+import logging
 import os
 import random
 import re
@@ -33,11 +34,13 @@ import sys
 import time
 from collections import Counter
 from pathlib import Path
+from typing import Annotated
 from urllib.parse import urlparse
 
 import httpx
 from markdownify import markdownify as md
 from mcp.server.mcpserver import MCPServer
+from pydantic import Field
 
 
 def _load_dotenv(path: Path):
@@ -576,9 +579,26 @@ async def discover_publications(limit: int = 15, recent_posts: int = 3) -> list[
     return [{k: v for k, v in x.items() if v not in (None, "", [], False)} for x in top] + failed
 
 
+def _int_arg(value: str | int | None, default: int, low: int, high: int) -> int:
+    """Lenient number parsing for prompt arguments: empty → default, "14 days" → 14, clamped to [low, high]."""
+    match = re.search(r"\d+", str(value or ""))
+    return max(low, min(int(match.group()), high)) if match else default
+
+
+# MCP prompt arguments are always strings, and clients like the Claude mobile app send "" for fields left
+# empty. With `int` parameters, validation then fails and the app only shows an unknown network error.
+# Hence plain strings that are parsed leniently, plus descriptions for the app's input form.
 @mcp.prompt()
-def news_briefing(days: int = 7, focus: str = "", max_items: int = 10, language: str = "") -> str:
+def news_briefing(
+    days: Annotated[str, Field(description="Period in calendar days, default 7")] = "",
+    focus: Annotated[str, Field(description="Optional topical focus, e.g. 'AI regulation'")] = "",
+    max_items: Annotated[str, Field(description="Max. items in the main part, default 10")] = "",
+    language: Annotated[str, Field(description="Language of the briefing, e.g. 'German'; "
+                                               "empty = your language")] = "",
+) -> str:
     """News briefing from my Substack subscriptions: only real new events, no essays or old topics."""
+    days, max_items = _int_arg(days, 7, 1, 90), _int_arg(max_items, 10, 1, 30)
+    focus, language = (focus or "").strip(), (language or "").strip()
     focus_line = f"Topical focus: {focus}. Other topics only if they are truly significant.\n" if focus else ""
     # The prompt itself is in English; without a hint, Claude would conclude that the answer should be
     # in English too. So set the language explicitly or explicitly leave it open.
@@ -661,6 +681,31 @@ def print_stats(hours: float | None = None):
               f"fetched {results['miss']}  → {saved / total:.0%} without a request")
 
 
+log = logging.getLogger("substack_mcp")
+
+
+class _CloudLoggingFormatter(logging.Formatter):
+    """One JSON object per log record, including the traceback.
+
+    Cloud Run turns every output line into its own log entry. The SDK's Rich handler draws multi-line
+    tracebacks in boxes, which ends up as dozens of fragmented entries. JSON lines are parsed by Cloud
+    Logging as one structured entry with the right severity, and Error Reporting picks up the stack trace."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        message = record.getMessage()
+        if record.exc_info:
+            message += "\n" + self.formatException(record.exc_info)
+        return json.dumps({"severity": record.levelname, "message": message, "logger": record.name},
+                          ensure_ascii=False)
+
+
+def _use_cloud_logging():
+    """Replaces the Rich handler that MCPServer installs with JSON lines on stderr."""
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(_CloudLoggingFormatter())
+    logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
+
+
 class _BearerAuth:
     """ASGI middleware: only lets HTTP requests through with "Authorization: Bearer <token>".
 
@@ -693,7 +738,7 @@ class _BearerAuth:
             reason = self._check(dict(scope["headers"]).get(b"authorization", b""))
             if reason:
                 ua = dict(scope["headers"]).get(b"user-agent", b"").decode(errors="replace")[:40]
-                print(f"401 for {scope['method']} {scope['path']} ({ua}): {reason}", file=sys.stderr, flush=True)
+                log.warning("401 for %s %s (%s): %s", scope["method"], scope["path"], ua, reason)
                 await send({"type": "http.response.start", "status": 401,
                             "headers": [(b"content-type", b"application/json")]})
                 await send({"type": "http.response.body", "body": b'{"error":"unauthorized"}'})
@@ -725,8 +770,13 @@ if __name__ == "__main__":
                 ),
                 host=host,
             ), secret)
-            # Own uvicorn instead of mcp.run: access log off, Cloud Run logs requests itself anyway
+            on_cloud_run = bool(os.environ.get("K_SERVICE"))  # set by Cloud Run
+            if on_cloud_run:
+                _use_cloud_logging()
+            # Own uvicorn instead of mcp.run: access log off, Cloud Run logs requests itself anyway.
+            # On Cloud Run, log_config=None makes uvicorn log through the root handler, i.e. as JSON too.
             uvicorn.run(app, host=host, port=int(os.environ.get("PORT") or os.environ.get("MCP_PORT") or 8000),
-                        access_log=False, log_level="info")
+                        access_log=False, log_level="info",
+                        **({"log_config": None} if on_cloud_run else {}))
         else:
             mcp.run(transport=transport)
