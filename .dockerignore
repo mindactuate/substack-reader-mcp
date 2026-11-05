@@ -1,0 +1,15 @@
+# Secrets and local state don't belong in the image
+.env
+.env.*
+.mcp.json
+cache.json
+cache.json.tmp
+stats.jsonl
+subs.txt
+.venv/
+__pycache__/
+.vscode/
+deploy.sh
+killswitch.sh
+cleanup-policy.json
+billing-killswitch/

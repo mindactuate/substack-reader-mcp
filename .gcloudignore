@@ -1,0 +1,15 @@
+# What is not uploaded to Cloud Build (applies before .dockerignore)
+.gcloudignore
+.env
+.env.*
+.mcp.json
+cache.json
+cache.json.tmp
+stats.jsonl
+subs.txt
+.venv/
+__pycache__/
+.vscode/
+deploy.sh
+cleanup-policy.json
+billing-killswitch/
