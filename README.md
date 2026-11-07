@@ -1,18 +1,21 @@
 # Substack Reader MCP
 
-An MCP server that gives Claude read access to your Substack subscriptions. With it, Claude can list your subscriptions, scan new posts, read full texts (including paid posts you subscribe to), create a news briefing and suggest new publications.
+An MCP server that gives Claude read access to your Substack subscriptions and to RSS/Atom feeds you add. With it, Claude can list your subscriptions, scan new posts, read full texts (including paid posts you subscribe to), create a news briefing and suggest new publications and feeds.
 
 | Tool / Prompt            | Purpose                                                                                                                     |
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
 | `list_subscriptions`     | All subscribed publications                                                                                                 |
-| `get_recent_posts`       | Posts from all subscriptions of the last N days with teaser and signals (length, tags, reactions, paywall …)                |
-| `get_post` / `get_posts` | Full text of one or several posts as Markdown                                                                               |
+| `get_recent_posts`       | Posts from all subscriptions and RSS feeds of the last N days with teaser and signals (length, tags, reactions, paywall …)  |
+| `get_post` / `get_posts` | Full text of one or several posts as Markdown: Substack posts, RSS items and other web pages                                |
 | `discover_publications`  | New publications recommended by your subscriptions, sorted by number of recommendations, with description and latest titles |
+| `list_rss`               | The RSS/Atom feeds you added                                                                                                |
+| `add_rss` / `remove_rss` | Add a feed (feed URL or website, the feed is found automatically) or remove it                                              |
 | Prompt `news_briefing`   | Ready-made request for a briefing that lists only real, new events                                                          |
+| Prompt `suggest_rss`     | Claude searches the web for feeds that fit your sources and interests and adds the ones you pick                            |
 
-The server is read-only. Subscribing, liking or commenting is not possible through Claude: for suggestions from `discover_publications`, Claude provides the link and you subscribe on Substack. This way, even a crafted post text cannot trigger an action on your behalf.
+Towards Substack, the server is read-only. Subscribing, liking or commenting is not possible through Claude: for suggestions from `discover_publications`, Claude provides the link and you subscribe on Substack. This way, even a crafted post text cannot trigger an action on your behalf. The only thing Claude can change is your feed list (see [RSS feeds](#rss-feeds)).
 
-The Substack endpoints are unofficial and may change. The server throttles to at most 2 requests/s, retries on 429/5xx and caches: subscription list and archives for 15 minutes, recommendations for 1 day, full texts for 7 days. If a publication cannot be loaded, the tools return an entry with `error` for it instead of silently leaving it out. If Substack changes an interface, you notice right away.
+The Substack endpoints are unofficial and may change. The server throttles Substack to at most 2 requests/s (every other host separately with the same limit), retries on 429/5xx and caches: subscription list, archives and feeds for 15 minutes, recommendations for 1 day, full texts for 7 days. If a publication cannot be loaded, the tools return an entry with `error` for it instead of silently leaving it out. If Substack changes an interface, you notice right away.
 
 <details>
 <summary><h2>Example: Substack Briefing · 29 Oct–5 Nov 2026</h2></summary>
@@ -148,6 +151,16 @@ The criteria and the format of the briefing live in [prompts/](prompts/) and can
 | `max_items` | `10`    | Maximum number of items in the main part, the rest goes under "In brief"                                                                |
 | `language`  | –       | Language of the briefing, e.g. "German". If empty, Claude uses your language, not English just because the prompt is written in English |
 
+## RSS feeds
+
+Feeds you add appear in `get_recent_posts` and therefore also in the briefing, marked with `source: "rss"`. Ask Claude, e.g. "Add netzpolitik.org as a feed", or use the `suggest_rss` prompt: it hands Claude your feeds, subscriptions and `prompts/interests.md` and asks it to search the web, present suggestions and only add the ones you pick.
+
+- **Feed list:** `feeds.json` next to the cache, i.e. in the bucket on Cloud Run (`/data/feeds.json`). It is plain JSON and can also be edited by hand.
+- **Finding the feed:** `add_rss` accepts the feed URL or a website. For a website, it uses the page's feed links (`<link rel="alternate">`) or tries common paths like `/feed`. Some sites (e.g. heise.de) don't link their feed; then pass the feed URL.
+- **Full texts:** If the feed contains the full text, `get_post` takes it from there. Otherwise it extracts the article from the web page with [trafilatura](https://trafilatura.readthedocs.io/). Feeds are fetched with ETag/Last-Modified, so an unchanged feed costs no download.
+- **Substack feeds:** Feeds of publications you subscribe to are rejected, their posts already come via the subscription.
+- **Safeguards:** at most 100 feeds; no requests to private or internal addresses (e.g. the Cloud Run metadata server), also not via redirects; at most 10 MB per response; the Substack cookie is never sent with feed and web requests. `add_rss` and `remove_rss` are marked as write tools, so clients like claude.ai can ask for confirmation before they run.
+
 ## Getting the Substack cookie
 
 The server logs in with your `substack.sid` cookie.
@@ -210,6 +223,7 @@ Request statistics (duration, retries, cache hits) from `stats.jsonl`, optionall
 | `MCP_ALLOWED_HOSTS`                          | Optional: allowed host headers, comma-separated (protection against DNS rebinding)                   |
 | `SUBSTACK_CACHE_FILE`, `SUBSTACK_STATS_FILE` | Paths for cache and statistics, `SUBSTACK_STATS_FILE=off` disables statistics                        |
 | `SUBSTACK_PROMPTS_DIR`                       | Different folder for the prompt files                                                                |
+| `RSS_FEEDS_FILE`                             | Path of the feed list, default `feeds.json` next to the cache file                                   |
 
 Variables can also be placed in a `.env` next to the script. Environment variables that are already set take precedence.
 
@@ -237,6 +251,7 @@ The script creates a budget covering **all projects of the billing account**. Wh
 ### 2. Deploying the server
 
 ```bash
+gcloud projects list # get projects
 ./deploy.sh <PROJECT_ID> [REGION=europe-west3]
 ```
 
@@ -244,7 +259,7 @@ You can run the script as often as you like. It first checks whether the cookie 
 
 - the secrets `substack-sid` and `substack-mcp-secret` in Secret Manager (old versions are deleted),
 - a dedicated service account that may only read these secrets and use the cache bucket,
-- the bucket `<project>-substack-mcp-cache`, mounted at `/data` for `cache.json`,
+- the bucket `<project>-substack-mcp-cache`, mounted at `/data` for `cache.json` and `feeds.json`,
 - the service `substack-mcp`: publicly reachable, but only usable with the token, max. 1 and min. 0 instances,
 - a warning email at €5 per project (`BUDGET=…` changes the amount) and a cleanup policy that keeps only
   the last 3 images.
@@ -273,7 +288,7 @@ The connector is tied to your account and is then also available in the **mobile
 
 Whether custom connectors are available depends on your Claude plan.
 
-**The token is the key, not the URL.** Without the token, the server responds with 401. Anyone who has the token can read your subscriptions and the full texts of posts, but cannot read the cookie and cannot write anything. If it gets into the wrong hands, renew the token (see the table above).
+**The token is the key, not the URL.** Without the token, the server responds with 401. Anyone who has the token can read your subscriptions and the full texts of posts and change your feed list, but cannot read the cookie and cannot do anything on Substack. If it gets into the wrong hands, renew the token (see the table above).
 
 Example questions in the app:
 
@@ -281,6 +296,7 @@ Example questions in the app:
 - "Summarize the latest post from Dwarkesh."
 - "Create a news briefing for the last 7 days focusing on AI regulation."
 - "Which newsletters might also interest me?"
+- "Add the feed of netzpolitik.org."
 
 ## Files
 

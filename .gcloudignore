@@ -5,6 +5,8 @@
 .mcp.json
 cache.json
 cache.json.tmp
+feeds.json
+feeds.json.tmp
 stats.jsonl
 subs.txt
 .venv/

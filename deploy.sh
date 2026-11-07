@@ -10,7 +10,7 @@
 # Creates or updates:
 #   Secrets      substack-sid, substack-mcp-secret   (Secret Manager, older versions are destroyed)
 #   Account      substack-mcp@<project>             (may only read these secrets and use the cache bucket)
-#   Bucket       <project>-substack-mcp-cache       (cache.json, mounted at /data)
+#   Bucket       <project>-substack-mcp-cache       (cache.json and feeds.json, mounted at /data)
 #   Service      substack-mcp, publicly reachable, but only with "Authorization: Bearer <token>"; max. 1 instance
 #   Cleanup      Artifact Registry keeps only the last 3 images (cleanup-policy.json)
 #   Budget       warning email at 50 % and 100 % of BUDGET (default 5, in the billing account's currency)
