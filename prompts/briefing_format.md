@@ -1,6 +1,6 @@
-## Substack Briefing · <DD.MM.>–<DD.MM.YYYY>
+## News Briefing · <DD.MM.>–<DD.MM.YYYY>
 
-<N> posts from <M> publications reviewed · <K> news items
+<N> posts from <M> sources listed · <R> read in full · <K> news items
 
 **At a glance**
 
@@ -22,6 +22,9 @@ _<DD.MM.> · <Status> · [<Publication>](url), [<Publication>](url)_
 
 - **<Headline>** · <DD.MM.> · [<Publication>](url)
 
+(with more than about 10 entries, group them under the same categories as the main part, as
+bold lines, most important first)
+
 ### Worth reading, but not news
 
 - [<Title>](url) · <Publication>: <what it is about, half a sentence>
@@ -41,12 +44,17 @@ Rules:
   just a single list.
 - Within a category, most important first.
 - Date = date of the event. Unknown: "reported <DD.MM.>". Before the period: "<DD.MM.>, reported <DD.MM.>".
-- Status exactly one of: "official" (primary source such as a filing, paper, announcement), "several
-  sources", "single source", "unconfirmed" (rumours, "reportedly", "is said to"). If only the paywall
-  preview was read, add "· preview".
+- Status exactly one of: "official" (the actor's own publication is among the linked sources, e.g. a
+  government press release, court ruling, company announcement, paper), "several sources" (at least two
+  independent outlets; several feeds of one outlet count as one), "single source", "unconfirmed"
+  (rumours, "reportedly", "is said to"). A news report about an announcement is not "official" by
+  itself. If only the paywall preview was read, add "· preview".
 - Every item has the same length: headline, meta line, 2 sentences, 1 relevance sentence. No exceptions.
 - Always leave a blank line between headline, meta line, text and relevance sentence. Never put two of
   these parts directly below each other, or Markdown renderers merge them into one paragraph.
-- Every item links to its sources via the post `url`.
+- Every item links to its sources via the post `url` exactly as returned by the tools. Never link a
+  homepage, a search page or a URL you constructed yourself; if a post has no `url`, name the
+  publication without a link.
+- Use the publication names as returned by get_recent_posts.
 - No remarks about the tools or the retrieval process in the briefing; technical details at most
   under the notes.

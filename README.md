@@ -5,11 +5,11 @@ An MCP server that gives Claude read access to your Substack subscriptions and t
 | Tool / Prompt            | Purpose                                                                                                                     |
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
 | `list_subscriptions`     | All subscribed publications                                                                                                 |
-| `get_recent_posts`       | Posts from all subscriptions and RSS feeds of the last N days with teaser and signals (length, tags, reactions, paywall …)  |
-| `get_post` / `get_posts` | Full text of one or several posts as Markdown: Substack posts, RSS items and other web pages                                |
+| `get_recent_posts`       | Posts from all subscriptions and RSS feeds of the last N days, grouped by publication, deduplicated and paginated, with teaser and signals (length, tags, paywall …) |
+| `get_post` / `get_posts` | Full text of one or several posts as Markdown: Substack posts, RSS items and other web pages; long texts in parts via `offset` |
 | `discover_publications`  | New publications recommended by your subscriptions, sorted by number of recommendations, with description and latest titles |
 | `list_rss`               | The RSS/Atom feeds you added                                                                                                |
-| `add_rss` / `remove_rss` | Add a feed (feed URL or website, the feed is found automatically) or remove it                                              |
+| `add_rss` / `remove_rss` | Add a feed (feed URL or website, the feed is found automatically, optionally with a `name`) or remove it                    |
 | Prompt `news_briefing`   | Ready-made request for a briefing that lists only real, new events                                                          |
 | Prompt `suggest_rss`     | Claude searches the web for feeds that fit your sources and interests and adds the ones you pick                            |
 
@@ -156,6 +156,7 @@ The criteria and the format of the briefing live in [prompts/](prompts/) and can
 Feeds you add appear in `get_recent_posts` and therefore also in the briefing, marked with `source: "rss"`. Ask Claude, e.g. "Add netzpolitik.org as a feed", or use the `suggest_rss` prompt: it hands Claude your feeds, subscriptions and `prompts/interests.md` and asks it to search the web, present suggestions and only add the ones you pick.
 
 - **Feed list:** `feeds.json` next to the cache, i.e. in the bucket on Cloud Run (`/data/feeds.json`). It is plain JSON and can also be edited by hand.
+- **Publication names:** all feeds of one website appear as one publication in `get_recent_posts` (e.g. all tagesschau section feeds as `tagesschau.de`), and articles that appear in several feeds are listed once. The name comes from the feed titles or the domain; to set it yourself, add a `"name"` to the entry in `feeds.json` or call `add_rss` again with `name`.
 - **Finding the feed:** `add_rss` accepts the feed URL or a website. For a website, it uses the page's feed links (`<link rel="alternate">`) or tries common paths like `/feed`. Some sites (e.g. heise.de) don't link their feed; then pass the feed URL.
 - **Full texts:** If the feed contains the full text, `get_post` takes it from there. Otherwise it extracts the article from the web page with [trafilatura](https://trafilatura.readthedocs.io/). Feeds are fetched with ETag/Last-Modified, so an unchanged feed costs no download.
 - **Substack feeds:** Feeds of publications you subscribe to are rejected, their posts already come via the subscription.
