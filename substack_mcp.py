@@ -40,7 +40,7 @@ import time
 from collections import Counter, OrderedDict
 from pathlib import Path
 from typing import Annotated
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, urljoin, urlparse
 
 import feedparser
 import httpx
@@ -1314,65 +1314,12 @@ async def _connect_cookie(value: str) -> dict:
     sid = match.group(1) if match else _clean_sid(value)
     if not sid:
         raise ValueError("Please paste the value of the substack.sid cookie.")
+    if "%" not in sid and ":" in sid:
+        # Developer tools can show the value decoded ("s:abc/d+e="); the browser sends it encoded
+        sid = quote(sid, safe="")
     return await _connect(sid, "cookie pasted on the setup page",
                           "Substack does not accept this cookie. Copy the complete value of substack.sid "
                           "again (it usually starts with s%3A).")
-
-
-async def _send_login_email(email: str):
-    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email or ""):
-        raise ValueError("Please enter a valid email address.")
-    try:
-        async with _client(web=True) as c:
-            r = await c.post("https://substack.com/api/v1/email-login",
-                             json={"email": email, "redirect": "/", "for_pub": "", "captcha_response": None})
-    except httpx.HTTPError as e:
-        raise ValueError(f"Substack could not be reached ({_error_text(e)}). Please try again.") from e
-    if r.is_success:
-        log.info("Substack login email requested")
-        return
-    try:
-        body = r.json()
-    except ValueError:
-        body = {}
-    message = (body.get("error") or "; ".join(e.get("msg", "") for e in body.get("errors", []))
-               or f"HTTP {r.status_code}")
-    log.warning("Substack login email refused: %s", message)
-    if "captcha" in message.lower():
-        raise ValueError("Substack asks for a captcha here, which the server cannot solve. "
-                         "Please use \"Paste the cookie instead\" below.")
-    raise ValueError(f"Substack did not send the email: {message}")
-
-
-def _is_substack_link(url: str) -> bool:
-    parsed = urlparse(url)
-    host = (parsed.hostname or "").lower()
-    return parsed.scheme == "https" and (host == "substack.com" or host.endswith(".substack.com"))
-
-
-async def _redeem_login_link(link: str) -> dict:
-    """Follows the login link from Substack's email and keeps the session cookie it sets."""
-    url = (link or "").strip()
-    if not _is_substack_link(url):
-        raise ValueError("That is not a Substack link. Copy the link of the sign-in button from the email.")
-    try:
-        async with _client(web=True) as c:  # a fresh client: its cookie jar only holds what Substack sets now
-            for _ in range(10):
-                r = await c.get(url, follow_redirects=False)
-                if not r.has_redirect_location:
-                    break
-                url = urljoin(url, r.headers["location"])
-                if not _is_substack_link(url):
-                    break  # never follow outside Substack; the cookie is set by then
-    except httpx.HTTPError as e:
-        raise ValueError(f"Substack could not be reached ({_error_text(e)}). Please try again.") from e
-    sid = next((ck.value for ck in c.cookies.jar
-                if ck.name == "substack.sid" and ck.domain.lstrip(".") == "substack.com" and ck.value), None)
-    rejected = ("This link did not log in. It may have been used already (opening it in a browser uses it "
-                "up) or expired. Request a new email and copy the link without opening it.")
-    if not sid:
-        raise ValueError(rejected)
-    return await _connect(sid, "email login on the setup page", rejected)
 
 
 _last_keepalive = 0.0
@@ -1399,8 +1346,7 @@ async def _keepalive(request) -> Response:
 
 if _gate:
     import setup_page
-    _setup = setup_page.SetupPage(SECRET, _gate, status=_session_status, connect_cookie=_connect_cookie,
-                                  send_login_email=_send_login_email, redeem_login_link=_redeem_login_link)
+    _setup = setup_page.SetupPage(SECRET, _gate, status=_session_status, connect_cookie=_connect_cookie)
     mcp.custom_route(setup_page.PATH, methods=["GET", "POST"], include_in_schema=False)(_setup.handle)
     mcp.custom_route(KEEPALIVE_PATH, methods=["POST"], include_in_schema=False)(_keepalive)
 

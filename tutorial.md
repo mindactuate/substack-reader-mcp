@@ -42,14 +42,12 @@ substack-rss-reader-secret**.
 
 ## Connect Substack
 
-1. Open the **setup page** from the output and log in with the token.
-2. Under **Log in with Substack**, enter the email address of your Substack account and request the login
-   email.
-3. In the email, **don't open the link**. Long-press (phone) or right-click (computer) the sign-in button,
-   copy the link and paste it on the setup page.
+Open the **setup page** from the output in a new tab and log in with the token. The page explains step by
+step how to copy your Substack login cookie from a private browser window and paste it there. It takes about
+two minutes.
 
-If Substack asks for a captcha, use **Paste the cookie instead** on the same page. It explains where to
-find the cookie.
+This step needs a computer, because phones have no developer tools. Afterwards, everything also works from
+your phone.
 
 ## Connect ChatGPT or Claude
 

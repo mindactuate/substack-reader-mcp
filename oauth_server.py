@@ -318,6 +318,8 @@ button.secondary {{ background: transparent; color: var(--text); border-color: v
 .error {{ color: var(--error); }}
 .ok {{ color: var(--ok); }}
 .muted, ol {{ color: var(--muted); font-size: .9rem; }}
+ol.steps {{ color: var(--text); font-size: 1rem; padding-left: 22px; }}
+ol.steps li {{ margin: 10px 0; }}
 details {{ margin-top: 24px; border-top: 1px solid var(--border); padding-top: 12px; }}
 summary {{ cursor: pointer; font-weight: 600; }}
 code {{ font-size: .85em; }}

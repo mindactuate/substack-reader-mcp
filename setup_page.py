@@ -1,20 +1,15 @@
 """The setup page: connects the server to Substack without editing .env or deploying again.
 
 Protected by MCP_SECRET, the same password as the OAuth login; after logging in, a signed cookie keeps the
-session for 30 minutes. Two ways to connect:
+session for 30 minutes. The user pastes the substack.sid cookie from a private browser window; the page
+explains step by step how to find it. (Logging in by email from the server doesn't work: Substack accepts
+the request but silently sends no email without a captcha.)
 
-1. Log in by email (preferred): Substack sends a login email. The user copies the link from it without
-   opening it, pastes it here, and the server follows it and keeps the session cookie it receives. That
-   session belongs to the server alone, so logging out in the browser no longer breaks anything. Only
-   works if Substack does not ask for a captcha.
-2. Paste the substack.sid cookie (fallback).
-
-The Substack-specific work is done by the callbacks from substack_mcp.py; this module only handles the
-page and its protection. The callbacks report problems as ValueError with a message for the user.
+Checking and storing the cookie is done by a callback from substack_mcp.py; this module only handles the
+page and its protection. The callback reports problems as ValueError with a message for the user.
 """
 
 import html
-import time
 from collections.abc import Awaitable, Callable
 from urllib.parse import urlparse
 
@@ -26,7 +21,6 @@ from oauth_server import PasswordGate, Signer, html_page, read_form
 PATH = "/setup"
 COOKIE = "setup_session"
 SESSION_TTL = 1800
-EMAIL_INTERVAL = 60  # at most one login email per minute
 
 Profile = dict  # {"name", "handle"} of the connected Substack account
 
@@ -44,16 +38,11 @@ def _who(profile: Profile) -> str:
 class SetupPage:
     def __init__(self, secret: str, gate: PasswordGate, *,
                  status: Callable[[], Awaitable[dict]],
-                 connect_cookie: Callable[[str], Awaitable[Profile]],
-                 send_login_email: Callable[[str], Awaitable[None]],
-                 redeem_login_link: Callable[[str], Awaitable[Profile]]):
+                 connect_cookie: Callable[[str], Awaitable[Profile]]):
         self.signer = Signer(secret, b"substack-mcp setup v1")
         self.gate = gate
         self.status = status
         self.connect_cookie = connect_cookie
-        self.send_login_email = send_login_email
-        self.redeem_login_link = redeem_login_link
-        self.last_email = 0.0
 
     def _authed(self, request: Request) -> bool:
         return self.signer.unsign("setup", request.cookies.get(COOKIE, "")) is not None
@@ -86,65 +75,58 @@ class SetupPage:
             response = RedirectResponse(PATH, status_code=303)
             response.delete_cookie(COOKIE, path=PATH)
             return response
-
-        message = error = None
+        if action != "set_cookie":
+            return await self._main(error="Unknown action.")
         try:
-            if action == "send_link":
-                email = form.get("email", "").strip()
-                if time.time() - self.last_email < EMAIL_INTERVAL:
-                    raise ValueError("Please wait a minute before requesting another email.")
-                self.last_email = time.time()
-                await self.send_login_email(email)
-                message = (f"Substack has sent a login email to {email}. Copy the link from it (don't open it) "
-                           "and paste it below.")
-            elif action == "use_link":
-                message = f"Connected to Substack as {_who(await self.redeem_login_link(form.get('link', '')))}."
-            elif action == "set_cookie":
-                message = f"Connected to Substack as {_who(await self.connect_cookie(form.get('cookie', '')))}."
-            else:
-                raise ValueError("Unknown action.")
+            profile = await self.connect_cookie(form.get("cookie", ""))
         except ValueError as e:
-            error = str(e)
-        return await self._main(message, error, cookie_open=action == "set_cookie")
+            return await self._main(error=str(e))
+        return await self._main(message=f"Connected to Substack as {_who(profile)}. You can close this page.")
 
-    async def _main(self, message: str | None = None, error: str | None = None,
-                    cookie_open: bool = False) -> Response:
+    async def _main(self, message: str | None = None, error: str | None = None) -> Response:
         e = html.escape
         s = await self.status()
         if s.get("profile"):
             state = f'<p class="ok">Connected to Substack as <strong>{e(_who(s["profile"]))}</strong>.</p>'
+            intro = "<h2>Connect another account or renew the login</h2>"
         else:
             state = f'<p class="error">Not connected to Substack{": " + e(s["error"]) if s.get("error") else "."}</p>'
+            intro = "<h2>Connect Substack</h2>"
         if s.get("updated"):
             state += f'<p class="muted">Session saved {e(s["updated"])} ({e(s.get("source") or "?")}).</p>'
         notice = (f'<p class="ok">{e(message)}</p>' if message else "") + (f'<p class="error">{e(error)}</p>' if error else "")
         return html_page(f"""{state}{notice}
-<h2>Log in with Substack</h2>
-<p class="muted">Substack sends a login email to your account. The server needs the link in it unused, so
-don't open it: copy it instead.</p>
-<form method="post">
-<label for="email">Email address of your Substack account</label>
-<input id="email" name="email" type="email" autocomplete="email" required>
-<div class="buttons"><button type="submit" name="action" value="send_link">Send login email</button></div>
-</form>
-<form method="post">
-<label for="link">Login link from the email</label>
-<ol><li>In the email, long-press (phone) or right-click (computer) the sign-in button or link.</li>
-<li>Choose "Copy link" and paste it here.</li></ol>
-<input id="link" name="link" type="url" required>
-<div class="buttons"><button type="submit" name="action" value="use_link">Connect</button></div>
-</form>
-<details{" open" if cookie_open else ""}><summary>Paste the cookie instead</summary>
-<ol><li>Open a private browser window and log in to substack.com.</li>
-<li>Open the developer tools (F12): <strong>Application</strong> (Chrome, Edge) or <strong>Storage</strong>
-(Firefox) → Cookies → https://substack.com.</li>
-<li>Copy the value of <code>substack.sid</code> and paste it here.</li>
-<li>Close the private window without logging out: logging out ends the session.</li></ol>
+{intro}
+<p>The server reads Substack with your login cookie <code>substack.sid</code>. You copy it once from your
+browser; after that, the server keeps the login alive on its own. This needs a computer: phones have no
+developer tools. Everything else, including ChatGPT and Claude on your phone, works without it.</p>
+
+<ol class="steps">
+<li><strong>Open a private window</strong>: Ctrl+Shift+N (Mac: Cmd+Shift+N) in Chrome and Edge,
+Ctrl+Shift+P (Mac: Cmd+Shift+P) in Firefox. A separate session means that logging out in your normal browser
+doesn't affect the server.</li>
+<li>Go to <strong>substack.com</strong> and <strong>sign in</strong>, as usual (email link, password or Google).</li>
+<li><strong>Open the developer tools</strong>: press F12 (Mac: Cmd+Option+I).</li>
+<li>Open the tab <strong>Application</strong> (Chrome, Edge; it may hide behind <strong>»</strong>) or
+<strong>Storage</strong> (Firefox). On the left, under <strong>Cookies</strong>, click
+<strong>https://substack.com</strong>.</li>
+<li>Find the row <strong>substack.sid</strong>, <strong>double-click its value</strong>, select it all
+(Ctrl+A, Mac: Cmd+A) and copy it (Ctrl+C, Mac: Cmd+C). It is long and starts with <code>s%3A</code> or
+<code>s:</code>.</li>
+<li><strong>Paste it below</strong> and save.</li>
+<li><strong>Close the private window without signing out.</strong> Closing is fine; signing out would end
+exactly this session.</li>
+</ol>
+<p class="muted">Safari: first turn on Settings → Advanced → "Show features for web developers", then
+Develop → Show Web Inspector → Storage → Cookies.</p>
+<p class="muted">Treat the value like a password: it gives full access to your Substack account. Paste it only
+here. The server only reads with it and never sends it anywhere but Substack.</p>
+
 <form method="post">
 <label for="cookie">Value of substack.sid</label>
 <input id="cookie" name="cookie" type="password" autocomplete="off" required>
-<div class="buttons"><button type="submit" name="action" value="set_cookie">Save cookie</button></div>
-</form></details>
+<div class="buttons"><button type="submit" name="action" value="set_cookie">Save and check</button></div>
+</form>
 <form method="post"><div class="buttons">
 <button type="submit" name="action" value="logout" class="secondary">Log out of this page</button></div></form>""")
 

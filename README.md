@@ -198,8 +198,14 @@ Feeds you add appear in `get_recent_posts` and therefore also in the briefing, m
 
 The server logs in to Substack with a session cookie, `substack.sid`. On a deployed server, you set it on the **setup page** (`https://<service>.run.app/setup`), without a deploy. The page is protected by the token (see [Deploying](#deploying-to-gcp-cloud-run)).
 
-1. **Log in by email (preferred):** enter the email address of your Substack account, and Substack sends a login email. **Don't open the link in it:** long-press or right-click the sign-in button, copy the link and paste it on the setup page. The server follows the link and keeps the session. This session belongs to the server alone, so logging out in your browser doesn't affect it.
-2. **Paste the cookie (fallback):** if Substack asks for a captcha, the server cannot log in by itself. Then open a **private browser window**, log in to substack.com, copy the value of `substack.sid` from the developer tools (**Application** or **Storage → Cookies → https://substack.com**) and paste it on the setup page. Close the window **without logging out**: logging out would end exactly this session.
+You copy the cookie once from your browser on a computer (phones have no developer tools); the setup page walks you through it:
+
+1. Open a **private window** (Chrome/Edge: Ctrl+Shift+N, Firefox: Ctrl+Shift+P; Mac: Cmd instead of Ctrl) and sign in to substack.com as usual.
+2. Open the developer tools (F12, Mac: Cmd+Option+I), tab **Application** (Chrome, Edge) or **Storage** (Firefox) → **Cookies → https://substack.com**.
+3. Double-click the value of `substack.sid`, copy it completely and paste it on the setup page. It starts with `s%3A` or `s:`; both work.
+4. Close the private window **without signing out**: signing out would end exactly this session. The separate session also means that signing out in your normal browser doesn't affect the server.
+
+The server checks the cookie right away and shows which account it belongs to. Logging in by email from the server doesn't work: Substack accepts the request but silently sends no email without a captcha.
 
 The session is extended by 90 days with every use. On Cloud Run, a weekly Cloud Scheduler job calls `/keepalive`, so it does not expire even if you don't use the server for a while. If Substack hands out a new session value, the server keeps it. If the session becomes invalid anyway, the tools report "Substack login expired or invalid" together with the link to the setup page.
 
