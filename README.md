@@ -204,6 +204,9 @@ Locally, the server runs over stdio. To test the remote mode, start it over HTTP
 ```bash
 MCP_TRANSPORT=streamable-http MCP_SECRET=test .venv/Scripts/python.exe substack_mcp.py
 # reachable at http://127.0.0.1:8000/mcp with header "Authorization: Bearer test"
+
+# with OAuth (login with "test"):
+MCP_TRANSPORT=streamable-http MCP_SECRET=test MCP_PUBLIC_URL=http://localhost:8000 .venv/Scripts/python.exe substack_mcp.py
 ```
 
 Request statistics (duration, retries, cache hits) from `stats.jsonl`, optionally only for the last N hours:
@@ -220,6 +223,8 @@ Request statistics (duration, retries, cache hits) from `stats.jsonl`, optionall
 | `SUBSTACK_USER`                              | Only without a cookie: `<user_id>-<name>` from the profile URL, returns the public subscription list |
 | `MCP_TRANSPORT`                              | `stdio` (default) or `streamable-http`                                                               |
 | `MCP_SECRET`                                 | Required for HTTP: access token, every request needs `Authorization: Bearer <token>`                 |
+| `MCP_PUBLIC_URL`                             | Public base URL of the server, e.g. `https://<service>.run.app`; enables OAuth (see [ChatGPT](#adding-it-to-chatgpt)) |
+| `OAUTH_CLIENTS_FILE`                         | Path of the OAuth clients that logged in, default `oauth_clients.json` next to the cache file        |
 | `MCP_HOST`, `MCP_PORT` / `PORT`              | Address and port in HTTP mode (default `127.0.0.1:8000`)                                             |
 | `MCP_ALLOWED_HOSTS`                          | Optional: allowed host headers, comma-separated (protection against DNS rebinding)                   |
 | `SUBSTACK_CACHE_FILE`, `SUBSTACK_STATS_FILE` | Paths for cache and statistics, `SUBSTACK_STATS_FILE=off` disables statistics                        |
@@ -260,8 +265,10 @@ You can run the script as often as you like. It first checks whether the cookie 
 
 - the secrets `substack-sid` and `substack-mcp-secret` in Secret Manager (old versions are deleted),
 - a dedicated service account that may only read these secrets and use the cache bucket,
-- the bucket `<project>-substack-mcp-cache`, mounted at `/data` for `cache.json` and `feeds.json`,
-- the service `substack-mcp`: publicly reachable, but only usable with the token, max. 1 and min. 0 instances,
+- the bucket `<project>-substack-mcp-cache`, mounted at `/data` for `cache.json`, `feeds.json` and
+  `oauth_clients.json`,
+- the service `substack-mcp`: publicly reachable, but only usable with the token or an OAuth login, max. 1
+  and min. 0 instances; `MCP_PUBLIC_URL` is set to the service URL (on the very first deploy in a second step),
 - a warning email at €5 per project (`BUDGET=…` changes the amount) and a cleanup policy that keeps only
   the last 3 images.
 
@@ -271,7 +278,7 @@ At the end it runs a smoke test and prints the connector URL. It copies the head
 | ----------------------------------- | --------------------------------------------------------------------------------------- |
 | Code changed                        | `./deploy.sh <PROJECT_ID>`                                                              |
 | New Substack cookie                 | Enter the value in `.env`, then `./deploy.sh <PROJECT_ID>`                              |
-| Renew the token (e.g. after a leak) | `ROTATE_MCP_SECRET=1 ./deploy.sh <PROJECT_ID>`, then change the header in the connector |
+| Renew the token (e.g. after a leak) | `ROTATE_MCP_SECRET=1 ./deploy.sh <PROJECT_ID>`, then change the header in the connector; OAuth connectors have to log in again |
 
 The `.env`, the local cache and the statistics go neither to Cloud Build nor into the image ([.gcloudignore](.gcloudignore), [.dockerignore](.dockerignore)).
 
@@ -285,11 +292,41 @@ The `.env`, the local cache and the statistics go neither to Cloud Build nor int
    clipboard). claude.ai stores the value encrypted and does not show it again.
 5. Activate the connector in the chat via the tools menu.
 
+Alternatively, claude.ai can also connect via OAuth, like ChatGPT: leave out the request header, and when
+connecting, log in with the token (see below).
+
 The connector is tied to your account and is then also available in the **mobile app**. The requests come from Anthropic's servers, not from your phone. That is why the server needs a public HTTPS URL.
 
 Whether custom connectors are available depends on your Claude plan.
 
 **The token is the key, not the URL.** Without the token, the server responds with 401. Anyone who has the token can read your subscriptions and the full texts of posts and change your feed list, but cannot read the cookie and cannot do anything on Substack. If it gets into the wrong hands, renew the token (see the table above).
+
+## Adding it to ChatGPT
+
+ChatGPT cannot send a custom header, so it connects via OAuth. The server is its own authorization
+server for that; there is no external account involved. Logging in means entering the token on a page of
+the server.
+
+1. In ChatGPT (web): **Settings → Apps → Advanced settings**, turn on **Developer mode**, then create a new
+   app or connector. The menu names change now and then, and whether developer mode is available depends on
+   your ChatGPT plan.
+2. Enter the connector URL from `deploy.sh` (`https://<service>.run.app/mcp`) and choose **OAuth** as the
+   authentication. If ChatGPT asks for a client ID, leave it empty: it registers itself.
+3. ChatGPT opens the server's login page. Paste the token as the password (`Bearer <token>` from the
+   clipboard works too) and confirm with **Allow**.
+
+Like on Claude, the connector is then also available in the mobile app.
+
+What happens behind the scenes:
+
+- **Tokens:** ChatGPT receives an access token that is valid for one hour and a refresh token for 90 days,
+  which is renewed with every use. Both are signed with a key derived from the token, so they survive
+  restarts without storage. **Renewing the token logs out all OAuth connectors at once.**
+- **Clients:** Anyone can register as a client, but only clients that completed a login are stored in
+  `oauth_clients.json` (at most 20, the oldest is dropped). Their tokens stop working when they are dropped.
+- **Login page:** After 20 failed attempts within an hour, it locks for the rest of that hour. It shows
+  which app wants access and where it sends you back to; with **Deny**, the app receives no access.
+- The static header keeps working alongside OAuth, so an existing claude.ai connector needs no change.
 
 Example questions in the app:
 
@@ -304,6 +341,7 @@ Example questions in the app:
 | File                                       | Contents                                                                   |
 | ------------------------------------------ | -------------------------------------------------------------------------- |
 | [substack_mcp.py](substack_mcp.py)         | The server                                                                 |
+| [oauth_server.py](oauth_server.py)         | OAuth login for clients without custom headers (ChatGPT)                   |
 | [prompts/](prompts/)                       | News criteria, briefing format, personal interests                         |
 | [Dockerfile](Dockerfile)                   | Image for Cloud Run                                                        |
 | [deploy.sh](deploy.sh)                     | Deployment to Cloud Run                                                    |

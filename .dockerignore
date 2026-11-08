@@ -6,6 +6,8 @@ cache.json
 cache.json.tmp
 feeds.json
 feeds.json.tmp
+oauth_clients.json
+oauth_clients.json.tmp
 stats.jsonl
 subs.txt
 .venv/

@@ -11,7 +11,8 @@
 #   Secrets      substack-sid, substack-mcp-secret   (Secret Manager, older versions are destroyed)
 #   Account      substack-mcp@<project>             (may only read these secrets and use the cache bucket)
 #   Bucket       <project>-substack-mcp-cache       (cache.json and feeds.json, mounted at /data)
-#   Service      substack-mcp, publicly reachable, but only with "Authorization: Bearer <token>"; max. 1 instance
+#   Service      substack-mcp, publicly reachable, but only with "Authorization: Bearer <token>" or an OAuth
+#                token (login with the same token); max. 1 instance
 #   Cleanup      Artifact Registry keeps only the last 3 images (cleanup-policy.json)
 #   Budget       warning email at 50 % and 100 % of BUDGET (default 5, in the billing account's currency)
 #
@@ -122,7 +123,10 @@ fi
 
 step "Build and deploy (takes a few minutes)"
 cd "$DIR"
-g run deploy "$SERVICE" --source . --region="$REGION" \
+# OAuth needs the public URL (the discovery metadata names absolute endpoints). It is only known once the
+# service exists, so on the very first deploy it is set afterwards, in a second revision.
+BASE="$(g run services describe "$SERVICE" --region="$REGION" --format='value(status.url)' 2>/dev/null || true)"
+g run deploy "$SERVICE" --source . --region="$REGION" ${BASE:+--update-env-vars="MCP_PUBLIC_URL=$BASE"} \
   --service-account="$SA" --allow-unauthenticated \
   --min-instances=0 --max-instances=1 --concurrency=20 --cpu=1 --memory=512Mi --timeout=300 \
   --execution-environment=gen2 \
@@ -130,6 +134,11 @@ g run deploy "$SERVICE" --source . --region="$REGION" \
   --clear-volumes --clear-volume-mounts \
   --add-volume="name=cache,type=cloud-storage,bucket=$BUCKET" \
   --add-volume-mount="volume=cache,mount-path=/data"
+if [[ -z "$BASE" ]]; then
+  BASE="$(g run services describe "$SERVICE" --region="$REGION" --format='value(status.url)')"
+  g run services update "$SERVICE" --region="$REGION" --update-env-vars="MCP_PUBLIC_URL=$BASE" >/dev/null
+  echo "MCP_PUBLIC_URL set to $BASE (OAuth)."
+fi
 
 step "Cleanup policy for old images"
 g artifacts repositories set-cleanup-policies cloud-run-source-deploy --location="$REGION" \
@@ -138,7 +147,6 @@ g artifacts repositories set-cleanup-policies cloud-run-source-deploy --location
   || echo "WARNING: could not set the cleanup policy."
 
 step "Smoke test"
-BASE="$(g run services describe "$SERVICE" --region="$REGION" --format='value(status.url)')"
 CONNECTOR="$BASE/mcp"
 AUTH="Bearer $(g secrets versions access latest --secret="$URL_SECRET")"
 tools="$(printf 'Authorization: %s' "$AUTH" | curl -s -X POST "$CONNECTOR" -H @- \
@@ -146,18 +154,19 @@ tools="$(printf 'Authorization: %s' "$AUTH" | curl -s -X POST "$CONNECTOR" -H @-
   -H 'MCP-Protocol-Version: 2025-06-18' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
   | grep -o '"name":"[a-z_]*"' | sort -u | wc -l)"
 wrong="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CONNECTOR")"
-echo "Tools found: $tools (expected 5) · call without token: HTTP $wrong (expected 401)"
+oauth="$(curl -s -o /dev/null -w '%{http_code}' "$BASE/.well-known/oauth-protected-resource/mcp")"
+echo "Tools found: $tools (expected 8) · call without token: HTTP $wrong (expected 401)"
+echo "OAuth metadata: HTTP $oauth (expected 200)"
 
 step "Done"
-echo "In claude.ai: Settings → Connectors → Add custom connector"
-echo "  URL:            $CONNECTOR"
-echo "  Authentication: No authentication"
-echo "  Request header: name 'Authorization', value 'Bearer <token>'"
+echo "Connector URL: $CONNECTOR"
+echo "  ChatGPT (or claude.ai with OAuth): authentication 'OAuth', then log in with the token as password"
+echo "  claude.ai with header: 'No authentication' + request header 'Authorization: Bearer <token>'"
 if [[ "${SHOW_URL:-0}" == 1 ]]; then
   echo "  Header value:   $AUTH"
 elif command -v clip.exe >/dev/null; then
   printf '%s' "$AUTH" | clip.exe
-  echo "  The complete header value ('Bearer …') is in the clipboard."
+  echo "  The complete header value ('Bearer …') is in the clipboard; the login page also accepts it as is."
 else
   echo "  Print the header value in plain text with SHOW_URL=1."
 fi

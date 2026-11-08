@@ -9,6 +9,7 @@ Setup:
     export SUBSTACK_USER="<user_id>-<name>"                    # only without a cookie: public subscription list, e.g. "12345-jane-doe"
     python substack_mcp.py                                     # stdio (Claude Desktop / Claude Code)
     MCP_TRANSPORT=streamable-http MCP_SECRET=<random> python substack_mcp.py   # remote (claude.ai custom connector)
+    # plus MCP_PUBLIC_URL=https://<host> for OAuth (ChatGPT; login with MCP_SECRET), see oauth_server.py
 
 The substack.sid cookie is a rolling session: every request extends it by 90 days. So it only expires if the
 server is not used for 90 days or if you log out of the browser session it came from. If it is invalid, the
@@ -122,6 +123,16 @@ def _interests_block() -> str:
     return f"\n\nMy personal focus areas (for selection and ordering):\n{text}" if text else ""
 
 
+# OAuth in HTTP mode, for clients without custom headers (ChatGPT); needs the server's public URL,
+# because the discovery metadata names absolute endpoints. Without it, only the static bearer token works.
+PUBLIC_URL = (os.environ.get("MCP_PUBLIC_URL") or "").strip().rstrip("/")
+_oauth = None
+if os.environ.get("MCP_TRANSPORT") == "streamable-http" and PUBLIC_URL and (os.environ.get("MCP_SECRET") or "").strip():
+    import oauth_server
+    _oauth = oauth_server.Provider(
+        os.environ["MCP_SECRET"].strip(), PUBLIC_URL,
+        Path(os.environ.get("OAUTH_CLIENTS_FILE") or CACHE_FILE.with_name("oauth_clients.json")))
+
 # The instructions deliberately contain only neutral usage hints. Criteria and answer format live
 # exclusively in the news_briefing prompt: claude.ai delivers server instructions like a tool result,
 # and Claude rightly treats directives in there ("always use this format") as third-party content and
@@ -139,7 +150,10 @@ mcp = MCPServer(
         "to link to it. "
         "Prepared requests are available as the prompts 'news_briefing' and 'suggest_rss'."
     ),
+    **({"auth": _oauth.auth_settings(), "auth_server_provider": _oauth} if _oauth else {}),
 )
+if _oauth:
+    mcp.custom_route(oauth_server.LOGIN_PATH, methods=["GET", "POST"], include_in_schema=False)(_oauth.login)
 _inflight: dict[str, asyncio.Future] = {}
 
 
@@ -1335,8 +1349,8 @@ def _use_cloud_logging():
 class _BearerAuth:
     """ASGI middleware: only lets HTTP requests through with "Authorization: Bearer <token>".
 
-    Deliberately without a WWW-Authenticate header: it would tempt clients like claude.ai into an OAuth flow
-    that doesn't exist here."""
+    Only used without MCP_PUBLIC_URL, i.e. without OAuth. Deliberately without a WWW-Authenticate header:
+    it would tempt clients like claude.ai into an OAuth flow that doesn't exist then."""
 
     def __init__(self, app, token: str):
         self.app = app
@@ -1379,7 +1393,8 @@ if __name__ == "__main__":
         transport = os.environ.get("MCP_TRANSPORT", "stdio")
         if transport == "streamable-http":
             # Remote mode (claude.ai custom connector, also in the mobile app).
-            # Every request needs "Authorization: Bearer <MCP_SECRET>"; claude.ai stores the header encrypted.
+            # Every request needs "Authorization: Bearer <MCP_SECRET>" (claude.ai stores the header encrypted)
+            # or, with MCP_PUBLIC_URL, alternatively an OAuth token.
             import uvicorn
             from mcp.server.transport_security import TransportSecuritySettings
             secret = (os.environ.get("MCP_SECRET") or "").strip()
@@ -1387,7 +1402,7 @@ if __name__ == "__main__":
                 sys.exit("MCP_SECRET missing: without a token, your Substack login would be open to anyone with the URL.")
             hosts = [h.strip() for h in os.environ.get("MCP_ALLOWED_HOSTS", "").split(",") if h.strip()]
             host = os.environ.get("MCP_HOST", "127.0.0.1")
-            app = _BearerAuth(mcp.streamable_http_app(
+            app = mcp.streamable_http_app(
                 streamable_http_path="/mcp",
                 stateless_http=True,
                 transport_security=TransportSecuritySettings(
@@ -1395,7 +1410,9 @@ if __name__ == "__main__":
                     allowed_hosts=hosts,
                 ),
                 host=host,
-            ), secret)
+            )
+            if not _oauth:  # with OAuth, the SDK checks the token (the static one included, see oauth_server.py)
+                app = _BearerAuth(app, secret)
             on_cloud_run = bool(os.environ.get("K_SERVICE"))  # set by Cloud Run
             if on_cloud_run:
                 _use_cloud_logging()
