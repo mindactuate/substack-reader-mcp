@@ -1,0 +1,2 @@
+# Shell scripts run on Linux (Cloud Shell, Cloud Build): with CRLF, bash fails on the \r
+*.sh text eol=lf
