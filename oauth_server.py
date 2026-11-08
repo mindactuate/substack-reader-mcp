@@ -12,6 +12,8 @@ provider behind them and a small login page. Logging in means entering MCP_SECRE
   only after a successful login, which means strangers cannot fill the file.
 - Authorization codes live in memory for 5 minutes. The server runs as a single instance, and the code is
   exchanged seconds after the login.
+
+Signer, PasswordGate and html_page are shared with the setup page (setup_page.py).
 """
 
 import asyncio
@@ -50,7 +52,7 @@ CODE_TTL = 300
 LOGIN_TTL = 600  # time to enter the password
 MAX_CLIENTS = 20  # stored clients; beyond that, the oldest has to log in again
 MAX_PENDING = 50  # registrations without a login yet
-MAX_FAILURES = 20  # failed logins per hour before the login page locks
+MAX_FAILURES = 20  # failed logins per hour (OAuth and setup page together) before logins lock
 MAX_FORM_BYTES = 8192
 STATIC_CLIENT = "static-token"
 
@@ -69,18 +71,68 @@ def strip_bearer(value: str) -> str:
     return token if all(p.lower() == "bearer" for p in scheme) else ""
 
 
+class Signer:
+    """Signed, expiring values (tokens, login links, setup sessions) with a key derived from MCP_SECRET."""
+
+    def __init__(self, secret: str, purpose: bytes):
+        self.key = hmac.new(secret.encode(), purpose, hashlib.sha256).digest()
+
+    def sign(self, kind: str, payload: dict, ttl: int) -> str:
+        body = _b64(json.dumps({**payload, "k": kind, "e": int(time.time()) + ttl},
+                               separators=(",", ":")).encode())
+        return (body + b"." + _b64(hmac.new(self.key, body, hashlib.sha256).digest())).decode()
+
+    def unsign(self, kind: str, value: str) -> dict | None:
+        """The payload if the signature is valid, `kind` matches and it has not expired."""
+        try:
+            body, sig = value.encode().split(b".")
+            if not hmac.compare_digest(_unb64(sig), hmac.new(self.key, body, hashlib.sha256).digest()):
+                return None
+            data = json.loads(_unb64(body))
+        except (ValueError, UnicodeError):
+            return None
+        return data if data.get("k") == kind and data.get("e", 0) > time.time() else None
+
+
+class PasswordGate:
+    """Checks a password against MCP_SECRET, with one limit on failed attempts for all login pages."""
+
+    def __init__(self, secret: str):
+        self.secret = secret.encode()
+        self.failures: list[float] = []
+
+    def locked(self) -> bool:
+        now = time.time()
+        self.failures = [t for t in self.failures if now - t < 3600]
+        if len(self.failures) >= MAX_FAILURES:
+            log.warning("Logins locked: %d failed attempts in the last hour", len(self.failures))
+            return True
+        return False
+
+    def matches(self, token: str) -> bool:
+        return hmac.compare_digest(token.encode(), self.secret)  # constant time, no timing leak
+
+    async def check(self, password: str, what: str) -> bool:
+        """True if `password` (also as "Bearer <token>") is MCP_SECRET; a failure costs a second."""
+        if self.matches(strip_bearer(password)):
+            return True
+        self.failures.append(time.time())
+        log.warning("Wrong password on the %s", what)
+        await asyncio.sleep(1)
+        return False
+
+
 class Provider:
     """OAuthAuthorizationServerProvider for a single user whose password is MCP_SECRET."""
 
-    def __init__(self, secret: str, public_url: str, clients_file: Path):
-        self.secret = secret.encode()
+    def __init__(self, secret: str, public_url: str, clients_file: Path, gate: PasswordGate):
+        self.gate = gate
         self.public_url = public_url.rstrip("/")
-        self.key = hmac.new(self.secret, b"substack-mcp oauth v1", hashlib.sha256).digest()
+        self.signer = Signer(secret, b"substack-mcp oauth v1")
         self.clients_file = clients_file
         self.clients = self._load_clients()
         self.pending: OrderedDict[str, OAuthClientInformationFull] = OrderedDict()
         self.codes: dict[str, AuthorizationCode] = {}
-        self.failures: list[float] = []
 
     def auth_settings(self) -> AuthSettings:
         return AuthSettings(
@@ -91,24 +143,6 @@ class Provider:
             client_registration_options=ClientRegistrationOptions(
                 enabled=True, valid_scopes=[SCOPE], default_scopes=[SCOPE]),
         )
-
-    # --- Signed values: tokens and the login link -------------------------------------------------
-
-    def _sign(self, kind: str, payload: dict, ttl: int) -> str:
-        body = _b64(json.dumps({**payload, "k": kind, "e": int(time.time()) + ttl},
-                               separators=(",", ":")).encode())
-        return (body + b"." + _b64(hmac.new(self.key, body, hashlib.sha256).digest())).decode()
-
-    def _unsign(self, kind: str, value: str) -> dict | None:
-        """The payload if the signature is valid, `kind` matches and it has not expired."""
-        try:
-            body, sig = value.encode().split(b".")
-            if not hmac.compare_digest(_unb64(sig), hmac.new(self.key, body, hashlib.sha256).digest()):
-                return None
-            data = json.loads(_unb64(body))
-        except (ValueError, UnicodeError):
-            return None
-        return data if data.get("k") == kind and data.get("e", 0) > time.time() else None
 
     # --- Clients ----------------------------------------------------------------------------------
 
@@ -159,39 +193,33 @@ class Provider:
 
     async def authorize(self, client: OAuthClientInformationFull, params: AuthorizationParams) -> str:
         # The request travels signed in the link, so the login page needs no state of its own
-        link = self._sign("login", {"c": client.client_id, "p": params.model_dump(mode="json")}, LOGIN_TTL)
+        link = self.signer.sign("login", {"c": client.client_id, "p": params.model_dump(mode="json")}, LOGIN_TTL)
         return f"{self.public_url}{LOGIN_PATH}?request={link}"
 
     async def login(self, request: Request) -> Response:
-        data = self._unsign("login", request.query_params.get("request", ""))
+        data = self.signer.unsign("login", request.query_params.get("request", ""))
         client = data and await self.get_client(data["c"])
         if not client:
-            return _page(error="This login link has expired. Start connecting again in the app.", status=400)
+            return _login_page(error="This login link has expired. Start connecting again in the app.", status=400)
         params = AuthorizationParams.model_validate(data["p"])
         app_name = client.client_name or "An app"
         target = urlparse(str(params.redirect_uri)).hostname or str(params.redirect_uri)
         if request.method != "POST":
-            return _page(app_name, target)
+            return _login_page(app_name, target)
 
-        form = await _read_form(request)
+        form = await read_form(request)
         if form is None:
-            return _page(error="Request too large.", status=413)
+            return _login_page(error="Request too large.", status=413)
         if form.get("action") == "deny":
             return RedirectResponse(construct_redirect_uri(
                 str(params.redirect_uri), error="access_denied", state=params.state), status_code=303)
-
-        now = time.time()
-        self.failures = [t for t in self.failures if now - t < 3600]
-        if len(self.failures) >= MAX_FAILURES:
-            log.warning("OAuth login locked: %d failed attempts in the last hour", len(self.failures))
-            return _page(error="Too many failed attempts. Try again in an hour.", status=429)
-        if not hmac.compare_digest(strip_bearer(form.get("password", "")).encode(), self.secret):
-            self.failures.append(now)
-            log.warning("OAuth login with wrong password for %s", app_name)
-            await asyncio.sleep(1)
-            return _page(app_name, target, error="Wrong password.", status=401)
+        if self.gate.locked():
+            return _login_page(error="Too many failed attempts. Try again in an hour.", status=429)
+        if not await self.gate.check(form.get("password", ""), f"OAuth login page ({app_name})"):
+            return _login_page(app_name, target, error="Wrong password.", status=401)
 
         self._approve(client)
+        now = time.time()
         self.codes = {k: v for k, v in self.codes.items() if v.expires_at > now}
         code = secrets.token_urlsafe(32)
         self.codes[code] = AuthorizationCode(
@@ -208,10 +236,10 @@ class Provider:
     def _tokens(self, client_id: str, scopes: list[str], resource: str | None) -> OAuthToken:
         claims = {"c": client_id, "s": scopes, "r": resource}
         return OAuthToken(
-            access_token=self._sign("at", claims, ACCESS_TTL),
+            access_token=self.signer.sign("at", claims, ACCESS_TTL),
             expires_in=ACCESS_TTL,
             scope=" ".join(scopes) or None,
-            refresh_token=self._sign("rt", claims, REFRESH_TTL),
+            refresh_token=self.signer.sign("rt", claims, REFRESH_TTL),
         )
 
     async def load_authorization_code(self, client: OAuthClientInformationFull,
@@ -226,7 +254,7 @@ class Provider:
         return self._tokens(client.client_id, authorization_code.scopes, authorization_code.resource)
 
     async def load_refresh_token(self, client: OAuthClientInformationFull, refresh_token: str) -> RefreshToken | None:
-        data = self._unsign("rt", refresh_token)
+        data = self.signer.unsign("rt", refresh_token)
         if not data or data["c"] != client.client_id:
             return None
         return RefreshToken(token=refresh_token, client_id=data["c"], scopes=data["s"],
@@ -238,9 +266,9 @@ class Provider:
 
     async def load_access_token(self, token: str) -> AccessToken | None:
         token = strip_bearer(token)  # the SDK only removes the first "Bearer "
-        if hmac.compare_digest(token.encode(), self.secret):  # constant time, no timing leak
+        if self.gate.matches(token):
             return AccessToken(token=token, client_id=STATIC_CLIENT, scopes=[])
-        data = self._unsign("at", token)
+        data = self.signer.unsign("at", token)
         if not data:
             log.info("Token rejected: invalid or expired (length %d)", len(token))
             return None
@@ -254,7 +282,8 @@ class Provider:
         """Not offered (revocation is disabled): signed tokens can only be revoked all at once, by rotating MCP_SECRET."""
 
 
-async def _read_form(request: Request) -> dict[str, str] | None:
+async def read_form(request: Request) -> dict[str, str] | None:
+    """The urlencoded form fields; None if the body is larger than MAX_FORM_BYTES."""
     body = b""
     async for chunk in request.stream():
         body += chunk
@@ -263,47 +292,59 @@ async def _read_form(request: Request) -> dict[str, str] | None:
     return {k: v[0] for k, v in parse_qs(body.decode(errors="replace")).items()}
 
 
-def _page(app_name: str | None = None, target: str | None = None, error: str | None = None,
-          status: int = 200) -> HTMLResponse:
-    """The login page; without `app_name` only the error message."""
-    e = html.escape
-    if app_name:
-        content = f"""<p><strong>{e(app_name)}</strong> wants to read your Substack subscriptions and RSS feeds
-and change your feed list. After the login, you are sent back to <strong>{e(target or "")}</strong>.</p>
-<form method="post">
-<input type="hidden" name="username" value="substack-mcp" autocomplete="username">
-<label for="password">Password (the MCP_SECRET token)</label>
-<input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
-{f'<p class="error">{e(error)}</p>' if error else ''}
-<div class="buttons"><button type="submit" name="action" value="allow">Allow</button>
-<button type="submit" name="action" value="deny" class="secondary" formnovalidate>Deny</button></div>
-</form>"""
-    else:
-        content = f'<p class="error">{e(error or "")}</p>'
+def html_page(content: str, status: int = 200, headers: dict | None = None) -> HTMLResponse:
+    """A small page in the server's style; `content` must already be escaped."""
     page = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Substack Reader login</title>
+<title>Substack &amp; RSS Reader</title>
 <style>
-:root {{ --bg: #f6f5f2; --card: #fff; --text: #1f1e1c; --muted: #6b6862; --accent: #ff6719; --border: #dedbd4; --error: #b3261e; }}
-@media (prefers-color-scheme: dark) {{ :root {{ --bg: #171615; --card: #22211f; --text: #ecebe8; --muted: #a29f98; --border: #3a3835; --error: #f2b8b5; }} }}
+:root {{ --bg: #f6f5f2; --card: #fff; --text: #1f1e1c; --muted: #6b6862; --accent: #ff6719; --border: #dedbd4;
+  --error: #b3261e; --ok: #1e6b3a; }}
+@media (prefers-color-scheme: dark) {{ :root {{ --bg: #171615; --card: #22211f; --text: #ecebe8; --muted: #a29f98;
+  --border: #3a3835; --error: #f2b8b5; --ok: #9fd8ae; }} }}
 * {{ box-sizing: border-box; }}
 body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px; background: var(--bg);
   color: var(--text); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }}
-main {{ width: 100%; max-width: 420px; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; }}
+main {{ width: 100%; max-width: 480px; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; }}
 h1 {{ font-size: 1.25rem; margin: 0 0 12px; }}
+h2 {{ font-size: 1rem; margin: 24px 0 4px; }}
 label {{ display: block; font-size: .9rem; color: var(--muted); margin: 16px 0 6px; }}
-input[type=password] {{ width: 100%; padding: 10px 12px; font: inherit; color: inherit; background: var(--bg);
-  border: 1px solid var(--border); border-radius: 8px; }}
+input[type=password], input[type=email], input[type=text], input[type=url] {{ width: 100%; padding: 10px 12px; font: inherit;
+  color: inherit; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; }}
 .buttons {{ display: flex; gap: 8px; margin-top: 16px; }}
 button {{ flex: 1; padding: 10px; font: inherit; font-weight: 600; border-radius: 8px; border: 1px solid var(--accent);
   background: var(--accent); color: #fff; cursor: pointer; }}
 button.secondary {{ background: transparent; color: var(--text); border-color: var(--border); }}
 .error {{ color: var(--error); }}
+.ok {{ color: var(--ok); }}
+.muted, ol {{ color: var(--muted); font-size: .9rem; }}
+details {{ margin-top: 24px; border-top: 1px solid var(--border); padding-top: 12px; }}
+summary {{ cursor: pointer; font-weight: 600; }}
+code {{ font-size: .85em; }}
 </style></head>
-<body><main><h1>Substack Reader</h1>{content}</main></body></html>"""
+<body><main><h1>Substack &amp; RSS Reader</h1>{content}</main></body></html>"""
     return HTMLResponse(page, status_code=status, headers={
         "Cache-Control": "no-store",
         "Referrer-Policy": "no-referrer",
         "X-Frame-Options": "DENY",
         "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
+        **(headers or {}),
     })
+
+
+def _login_page(app_name: str | None = None, target: str | None = None, error: str | None = None,
+                status: int = 200) -> HTMLResponse:
+    """The OAuth login page; without `app_name` only the error message."""
+    e = html.escape
+    if not app_name:
+        return html_page(f'<p class="error">{e(error or "")}</p>', status)
+    return html_page(f"""<p><strong>{e(app_name)}</strong> wants to read your Substack subscriptions and RSS feeds
+and change your feed list and reading priorities. After the login, you are sent back to <strong>{e(target or "")}</strong>.</p>
+<form method="post">
+<input type="hidden" name="username" value="substack-rss-reader" autocomplete="username">
+<label for="password">Password (the MCP_SECRET token)</label>
+<input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
+{f'<p class="error">{e(error)}</p>' if error else ''}
+<div class="buttons"><button type="submit" name="action" value="allow">Allow</button>
+<button type="submit" name="action" value="deny" class="secondary" formnovalidate>Deny</button></div>
+</form>""", status)

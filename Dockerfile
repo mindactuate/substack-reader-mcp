@@ -12,7 +12,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
-COPY substack_mcp.py oauth_server.py ./
+COPY substack_mcp.py oauth_server.py setup_page.py ./
 COPY prompts/ prompts/
 
 # No root in the container; /data is the mount point for the cache bucket

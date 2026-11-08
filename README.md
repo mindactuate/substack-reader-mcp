@@ -1,6 +1,14 @@
-# Substack Reader MCP
+# Substack & RSS Reader MCP
 
-An MCP server that gives Claude read access to your Substack subscriptions and to RSS/Atom feeds you add. With it, Claude can list your subscriptions, scan new posts, read full texts (including paid posts you subscribe to), create a news briefing and suggest new publications and feeds.
+An MCP server that gives Claude and ChatGPT read access to your Substack subscriptions and to RSS/Atom feeds you add. With it, they can list your subscriptions, scan new posts, read full texts (including paid posts you subscribe to), create a news briefing and suggest new publications and feeds.
+
+_Not affiliated with or endorsed by Substack._
+
+**Your own server in about 15 minutes, without installing anything:**
+
+[![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.svg)](https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https://github.com/mindactuate/substack-reader-mcp&cloudshell_git_branch=main&cloudshell_tutorial=tutorial.md&show=ide%2Cterminal)
+
+The button opens Google Cloud Shell with this repository and a step-by-step guide ([tutorial.md](tutorial.md)). The server is built from the code you see there, in your own Google Cloud project. See [Deploying to GCP](#deploying-to-gcp-cloud-run) for details.
 
 | Tool / Prompt            | Purpose                                                                                                                     |
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
@@ -10,10 +18,11 @@ An MCP server that gives Claude read access to your Substack subscriptions and t
 | `discover_publications`  | New publications recommended by your subscriptions, sorted by number of recommendations, with description and latest titles |
 | `list_rss`               | The RSS/Atom feeds you added                                                                                                |
 | `add_rss` / `remove_rss` | Add a feed (feed URL or website, the feed is found automatically, optionally with a `name`) or remove it                    |
+| `get_user_priorities` / `set_user_priorities` | Your reading priorities in your own words: what matters most to you when selecting and ordering posts |
 | Prompt `news_briefing`   | Ready-made request for a briefing that lists only real, new events                                                          |
 | Prompt `suggest_rss`     | Claude searches the web for feeds that fit your sources and interests and adds the ones you pick                            |
 
-Towards Substack, the server is read-only. Subscribing, liking or commenting is not possible through Claude: for suggestions from `discover_publications`, Claude provides the link and you subscribe on Substack. This way, even a crafted post text cannot trigger an action on your behalf. The only thing Claude can change is your feed list (see [RSS feeds](#rss-feeds)).
+Towards Substack, the server is read-only. Subscribing, liking or commenting is not possible through Claude: for suggestions from `discover_publications`, Claude provides the link and you subscribe on Substack. This way, even a crafted post text cannot trigger an action on your behalf. The only things Claude can change are your feed list (see [RSS feeds](#rss-feeds)) and your reading priorities (see [Reading priorities](#reading-priorities)).
 
 The Substack endpoints are unofficial and may change. The server throttles Substack to at most 2 requests/s (every other host separately with the same limit), retries on 429/5xx and caches: subscription list, archives and feeds for 15 minutes, recommendations for 1 day, full texts for 7 days. If a publication cannot be loaded, the tools return an entry with `error` for it instead of silently leaving it out. If Substack changes an interface, you notice right away.
 
@@ -140,9 +149,11 @@ _Notes: Only the paywall preview could be read for ChinaTalk "The New Senators o
 
 ## Briefing prompt
 
-The criteria and the format of the briefing live in [prompts/](prompts/) and can be adjusted without changing code. In `prompts/interests.md` you can set personal focus areas (in any language): copy `prompts/interests.example.md` to `prompts/interests.md` and edit it. The file is listed in `.gitignore`, so your interests stay out of the repository, but it is still included when deploying.
+The criteria and the format of the briefing live in [prompts/](prompts/) and can be adjusted without changing code. Your personal focus areas are your [reading priorities](#reading-priorities).
 
-**The format only applies via the `news_briefing` prompt.** In the Claude app, select it in the chat via the connector in the **+** menu; in Claude Code, use `/mcp__substack-reader__news_briefing`. If you ask freely instead ("What happened in my subscriptions?"), Claude answers in its own format. That is intentional: Claude treats instructions a server sends on its own as third-party content and does not follow them. A prompt, on the other hand, is something you choose yourself. If the format should also apply to free questions, copy the contents of `prompts/briefing_format.md` into the instructions of a claude.ai project and chat in that project.
+**The format only applies via the `news_briefing` prompt.** In the Claude app, select it in the chat via the connector in the **+** menu; in Claude Code, use `/mcp__substack-rss-reader__news_briefing`. If you ask freely instead ("What happened in my subscriptions?"), Claude answers in its own format. That is intentional: Claude treats instructions a server sends on its own as third-party content and does not follow them. A prompt, on the other hand, is something you choose yourself. If the format should also apply to free questions, copy the contents of `prompts/briefing_format.md` into the instructions of a claude.ai project and chat in that project.
+
+**ChatGPT does not offer MCP prompts**, only tools. There, create a project and copy `prompts/news_criteria.md` and `prompts/briefing_format.md` into its instructions; then ask in that project, e.g. "Create the briefing for the last 7 days."
 
 | Argument    | Default | Meaning                                                                                                                                 |
 | ----------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------- |
@@ -151,9 +162,18 @@ The criteria and the format of the briefing live in [prompts/](prompts/) and can
 | `max_items` | `10`    | Maximum number of items in the main part, the rest goes under "In brief"                                                                |
 | `language`  | –       | Language of the briefing, e.g. "German". If empty, Claude uses your language, not English just because the prompt is written in English |
 
+## Reading priorities
+
+Tell Claude or ChatGPT what matters most to you, in any language, e.g. "Set my reading priorities: AI regulation and European politics, no sports." They store it with `set_user_priorities` and read it with `get_user_priorities`; to change a part, they read the current text first and write the complete new one.
+
+- **Where they apply:** in the `news_briefing` and `suggest_rss` prompts, and on the first page of `get_recent_posts` as `user_priorities`. So they also count for free questions like "What's new?" and in ChatGPT, where there are no prompts.
+- **Storage:** `priorities.md` next to the cache, i.e. in the bucket on Cloud Run. Changes apply right away, without a deploy.
+- **Starting value:** as long as no priorities were set, the server uses `prompts/interests.md` if it exists: copy `prompts/interests.example.md` to `prompts/interests.md` and edit it. It is listed in `.gitignore`, so it stays out of the repository, but it is included when deploying.
+- `set_user_priorities` is marked as a write tool, so clients can ask for confirmation, and it accepts at most 4000 characters.
+
 ## RSS feeds
 
-Feeds you add appear in `get_recent_posts` and therefore also in the briefing, marked with `source: "rss"`. Ask Claude, e.g. "Add netzpolitik.org as a feed", or use the `suggest_rss` prompt: it hands Claude your feeds, subscriptions and `prompts/interests.md` and asks it to search the web, present suggestions and only add the ones you pick.
+Feeds you add appear in `get_recent_posts` and therefore also in the briefing, marked with `source: "rss"`. Ask Claude, e.g. "Add netzpolitik.org as a feed", or use the `suggest_rss` prompt: it hands Claude your feeds, subscriptions and reading priorities and asks it to search the web, present suggestions and only add the ones you pick.
 
 - **Feed list:** `feeds.json` next to the cache, i.e. in the bucket on Cloud Run (`/data/feeds.json`). It is plain JSON and can also be edited by hand.
 - **Publication names:** all feeds of one website appear as one publication in `get_recent_posts` (e.g. all tagesschau section feeds as `tagesschau.de`), and articles that appear in several feeds are listed once. The name comes from the feed titles or the domain; to set it yourself, add a `"name"` to the entry in `feeds.json` or call `add_rss` again with `name`.
@@ -162,16 +182,18 @@ Feeds you add appear in `get_recent_posts` and therefore also in the briefing, m
 - **Substack feeds:** Feeds of publications you subscribe to are rejected, their posts already come via the subscription.
 - **Safeguards:** at most 100 feeds; no requests to private or internal addresses (e.g. the Cloud Run metadata server), also not via redirects; at most 10 MB per response; the Substack cookie is never sent with feed and web requests. `add_rss` and `remove_rss` are marked as write tools, so clients like claude.ai can ask for confirmation before they run.
 
-## Getting the Substack cookie
+## Connecting Substack
 
-The server logs in with your `substack.sid` cookie.
+The server logs in to Substack with a session cookie, `substack.sid`. On a deployed server, you set it on the **setup page** (`https://<service>.run.app/setup`), without a deploy. The page is protected by the token (see [Deploying](#deploying-to-gcp-cloud-run)).
 
-1. Open a **private browser window** and log in to substack.com. A separate session has the advantage
-   that you can log out in your normal browser without the server losing its login.
-2. Open the developer tools: **Application → Cookies → https://substack.com** and copy the value of `substack.sid`.
-3. Close the window **without logging out**. Logging out would end exactly this session.
+1. **Log in by email (preferred):** enter the email address of your Substack account, and Substack sends a login email. **Don't open the link in it:** long-press or right-click the sign-in button, copy the link and paste it on the setup page. The server follows the link and keeps the session. This session belongs to the server alone, so logging out in your browser doesn't affect it.
+2. **Paste the cookie (fallback):** if Substack asks for a captcha, the server cannot log in by itself. Then open a **private browser window**, log in to substack.com, copy the value of `substack.sid` from the developer tools (**Application** or **Storage → Cookies → https://substack.com**) and paste it on the setup page. Close the window **without logging out**: logging out would end exactly this session.
 
-The session is extended by 90 days with every use. If it becomes invalid, the tools report "Substack login expired or invalid".
+The session is extended by 90 days with every use. On Cloud Run, a weekly Cloud Scheduler job calls `/keepalive`, so it does not expire even if you don't use the server for a while. If Substack hands out a new session value, the server keeps it. If the session becomes invalid anyway, the tools report "Substack login expired or invalid" together with the link to the setup page.
+
+- **Storage:** `substack_session.json` next to the cache, i.e. in the private bucket on Cloud Run.
+- **`SUBSTACK_SID` still works** (locally in the `.env`, on Cloud Run as a secret via `deploy.sh`). Whichever was set last wins: a login on the setup page replaces the variable, and a changed `SUBSTACK_SID` replaces a login from the setup page.
+- **Locally** (stdio, without a setup page), put the cookie in the `.env`.
 
 Only `substack.com`, `*.substack.com` and the custom domains of your subscriptions receive the cookie.
 The server never sends it to other URLs, not even via redirects.
@@ -183,7 +205,7 @@ Requirement: Python 3.13.
 ```bash
 python -m venv .venv
 .venv/Scripts/pip install -r requirements.txt      # Linux/macOS: .venv/bin/pip
-cp .env.example .env                                # enter SUBSTACK_SID
+cp .env.example .env                                # enter SUBSTACK_SID (see "Connecting Substack")
 ```
 
 For Claude Code, create a `.mcp.json` in the project folder with the following block; for Claude Desktop, add the same block to `claude_desktop_config.json`. Adjust the absolute paths to your checkout (`.mcp.json` is git-ignored because of them; on Linux/macOS the interpreter is `.venv/bin/python`):
@@ -191,9 +213,9 @@ For Claude Code, create a `.mcp.json` in the project folder with the following b
 ```json
 {
   "mcpServers": {
-    "substack-reader": {
-      "command": "/path/to/substack-mcp/.venv/Scripts/python.exe",
-      "args": ["/path/to/substack-mcp/substack_mcp.py"]
+    "substack-rss-reader": {
+      "command": "/path/to/your/checkout/.venv/Scripts/python.exe",
+      "args": ["/path/to/your/checkout/substack_mcp.py"]
     }
   }
 }
@@ -219,7 +241,9 @@ Request statistics (duration, retries, cache hits) from `stats.jsonl`, optionall
 
 | Variable                                     | Meaning                                                                                              |
 | -------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `SUBSTACK_SID`                               | Login cookie, needed for the subscription list and paid posts                                        |
+| `SUBSTACK_SID`                               | Login cookie, needed for the subscription list and paid posts; in HTTP mode also via the setup page |
+| `SUBSTACK_SESSION_FILE`                      | Path of the session set on the setup page, default `substack_session.json` next to the cache file    |
+| `PRIORITIES_FILE`                            | Path of the reading priorities, default `priorities.md` next to the cache file                       |
 | `SUBSTACK_USER`                              | Only without a cookie: `<user_id>-<name>` from the profile URL, returns the public subscription list |
 | `MCP_TRANSPORT`                              | `stdio` (default) or `streamable-http`                                                               |
 | `MCP_SECRET`                                 | Required for HTTP: access token, every request needs `Authorization: Bearer <token>`                 |
@@ -237,11 +261,51 @@ Without either `SUBSTACK_SID` or `SUBSTACK_USER`, the server reads the subscript
 
 ## Deploying to GCP (Cloud Run)
 
-I prepared a deploy script to deploy the MCP server to Cloud Run with scale to zero. So it only costs money while a request is running and stays within the free tier under normal use.
+`deploy.sh` deploys the MCP server to Cloud Run with scale to zero. So it only costs money while a request is running and stays within the free tier under normal use. Google requires a billing account anyway.
 
-**Requirements:** `gcloud` is installed and logged in, the project is linked to a billing account, and `SUBSTACK_SID` is in the `.env`. On Windows, run the scripts in Git Bash.
+### Option A: Open in Cloud Shell (no installation)
 
-### 1. Once: kill switch for the billing account
+[![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.svg)](https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https://github.com/mindactuate/substack-reader-mcp&cloudshell_git_branch=main&cloudshell_tutorial=tutorial.md&show=ide%2Cterminal)
+
+Cloud Shell is a terminal in the browser where `gcloud` is already installed and logged in. The button clones the current state of the repository and opens [tutorial.md](tutorial.md) next to it: choose a project, run `./deploy.sh <PROJECT_ID>`, connect Substack on the setup page, add the connector. The image is built from the code in that folder, in your project. Nothing comes from a prebuilt image.
+
+### Option B: from your computer
+
+**Requirements:** `gcloud` is installed and logged in, and the project is linked to a billing account. On Windows, run the scripts in Git Bash. `SUBSTACK_SID` in the `.env` is optional: without it, connect Substack on the setup page afterwards.
+
+```bash
+gcloud projects list # get projects
+./deploy.sh <PROJECT_ID> [REGION=europe-west3]
+```
+
+### What the script sets up
+
+You can run the script as often as you like. If there is a cookie in the `.env`, it first checks whether it is valid. Then it sets up:
+
+- the secret `substack-rss-reader-secret` with the token, and `substack-rss-reader-sid` if there is a cookie in the `.env` (Secret Manager, old versions are deleted),
+- a dedicated service account that may only read these secrets and use the cache bucket,
+- the bucket `<project>-substack-rss-reader-cache`, mounted at `/data` for the cache, feeds, reading priorities,
+  Substack session and OAuth clients,
+- the service `substack-rss-reader`: publicly reachable, but only usable with the token or an OAuth login, max. 1
+  and min. 0 instances; `MCP_PUBLIC_URL` is set to the service URL (on the very first deploy in a second step),
+- the Cloud Scheduler job `substack-rss-reader-keepalive`, weekly, so the Substack session doesn't expire,
+- a warning email at €5 per project (`BUDGET=…` changes the amount) and a cleanup policy that keeps only
+  the last 3 images.
+
+At the end it runs a smoke test and prints the setup page, the connector URL and the token. On your computer, it copies the header value `Bearer <token>` to the clipboard without displaying it (`SHOW_URL=1` prints it). In Cloud Shell, which has no clipboard, it prints the token. **Save the token in your password manager.** You can look it up again at any time in the Cloud Console under **Security → Secret Manager → substack-rss-reader-secret**.
+
+| Occasion                            | What to do                                                                              |
+| ----------------------------------- | --------------------------------------------------------------------------------------- |
+| Update to the newest version        | Click the Cloud Shell button again, then run `git pull && ./deploy.sh <PROJECT_ID>`; login, feeds, priorities and connections are kept |
+| Substack login expired              | Log in again on the setup page                                                          |
+| Renew the token (e.g. after a leak) | `ROTATE_MCP_SECRET=1 ./deploy.sh <PROJECT_ID>`, then change the header in the connector; OAuth connectors have to log in again |
+| Roll back an update                 | Cloud Console → Cloud Run → substack-rss-reader → **Revisions**, send all traffic to the previous one |
+
+The `.env`, the local cache and the statistics go neither to Cloud Build nor into the image ([.gcloudignore](.gcloudignore), [.dockerignore](.dockerignore)).
+
+### Optional: kill switch for the billing account
+
+The budget email only warns. If spending should stop automatically:
 
 ```bash
 gcloud billing accounts list
@@ -253,34 +317,6 @@ The script creates a budget covering **all projects of the billing account**. Wh
 - **Delay:** Google reports costs with a delay of several hours. This is an emergency brake, not a hard limit.
 - **Consequences:** Without billing, all services stop. Re-enable per project with
   `gcloud billing projects link <PROJECT_ID> --billing-account=<ID>`.
-
-### 2. Deploying the server
-
-```bash
-gcloud projects list # get projects
-./deploy.sh <PROJECT_ID> [REGION=europe-west3]
-```
-
-You can run the script as often as you like. It first checks whether the cookie from the `.env` is valid and then sets up:
-
-- the secrets `substack-sid` and `substack-mcp-secret` in Secret Manager (old versions are deleted),
-- a dedicated service account that may only read these secrets and use the cache bucket,
-- the bucket `<project>-substack-mcp-cache`, mounted at `/data` for `cache.json`, `feeds.json` and
-  `oauth_clients.json`,
-- the service `substack-mcp`: publicly reachable, but only usable with the token or an OAuth login, max. 1
-  and min. 0 instances; `MCP_PUBLIC_URL` is set to the service URL (on the very first deploy in a second step),
-- a warning email at €5 per project (`BUDGET=…` changes the amount) and a cleanup policy that keeps only
-  the last 3 images.
-
-At the end it runs a smoke test and prints the connector URL. It copies the header value `Bearer <token>` to the clipboard without displaying it. With `SHOW_URL=1` it is printed in plain text.
-
-| Occasion                            | Command                                                                                 |
-| ----------------------------------- | --------------------------------------------------------------------------------------- |
-| Code changed                        | `./deploy.sh <PROJECT_ID>`                                                              |
-| New Substack cookie                 | Enter the value in `.env`, then `./deploy.sh <PROJECT_ID>`                              |
-| Renew the token (e.g. after a leak) | `ROTATE_MCP_SECRET=1 ./deploy.sh <PROJECT_ID>`, then change the header in the connector; OAuth connectors have to log in again |
-
-The `.env`, the local cache and the statistics go neither to Cloud Build nor into the image ([.gcloudignore](.gcloudignore), [.dockerignore](.dockerignore)).
 
 ## Adding it to the Claude app
 
@@ -342,7 +378,9 @@ Example questions in the app:
 | ------------------------------------------ | -------------------------------------------------------------------------- |
 | [substack_mcp.py](substack_mcp.py)         | The server                                                                 |
 | [oauth_server.py](oauth_server.py)         | OAuth login for clients without custom headers (ChatGPT)                   |
-| [prompts/](prompts/)                       | News criteria, briefing format, personal interests                         |
+| [setup_page.py](setup_page.py)             | Setup page for connecting Substack                                         |
+| [prompts/](prompts/)                       | News criteria, briefing format, starting value for the reading priorities  |
+| [tutorial.md](tutorial.md)                 | Step-by-step guide shown in Cloud Shell                                    |
 | [Dockerfile](Dockerfile)                   | Image for Cloud Run                                                        |
 | [deploy.sh](deploy.sh)                     | Deployment to Cloud Run                                                    |
 | [cleanup-policy.json](cleanup-policy.json) | Cleanup policy for Artifact Registry                                       |

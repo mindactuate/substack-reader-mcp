@@ -8,6 +8,10 @@ feeds.json
 feeds.json.tmp
 oauth_clients.json
 oauth_clients.json.tmp
+priorities.md
+priorities.md.tmp
+substack_session.json
+substack_session.json.tmp
 stats.jsonl
 subs.txt
 .venv/
