@@ -1,7 +1,8 @@
 """
 Substack & RSS Reader MCP Server
 --------------------------------
-Gives Claude read access to your Substack subscriptions and to RSS/Atom feeds you add.
+Gives AI assistants such as Claude or ChatGPT read access to your Substack subscriptions and to RSS/Atom feeds
+you add.
 
 Setup:
     pip install -r requirements.txt
@@ -76,7 +77,7 @@ SUBS_FILE = Path(__file__).with_name("subs.txt")
 CACHE_FILE = Path(os.environ.get("SUBSTACK_CACHE_FILE") or Path(__file__).with_name("cache.json"))
 # A session set on the setup page or renewed by Substack, next to the cache (in the bucket on Cloud Run)
 SESSION_FILE = Path(os.environ.get("SUBSTACK_SESSION_FILE") or CACHE_FILE.with_name("substack_session.json"))
-# Reading priorities set with set_user_priorities; until then prompts/interests.md is the starting value
+# Reading priorities, set with set_user_priorities (or edited by hand)
 PRIORITIES_FILE = Path(os.environ.get("PRIORITIES_FILE") or CACHE_FILE.with_name("priorities.md"))
 MAX_PRIORITIES_CHARS = 4000
 PROFILE_URL = "https://substack.com/api/v1/user/profile/self"
@@ -168,11 +169,11 @@ def _prompt_text(name: str, optional: bool = False) -> str:
 
 
 def _priorities() -> str:
-    """The user's reading priorities: set with set_user_priorities, otherwise prompts/interests.md."""
+    """The user's reading priorities as set with set_user_priorities; "" if none are set."""
     try:
         return PRIORITIES_FILE.read_text(encoding="utf-8").strip()
     except FileNotFoundError:
-        return _prompt_text("interests", optional=True)
+        return ""
 
 
 def _priorities_block() -> str:
@@ -1266,7 +1267,7 @@ async def set_user_priorities(priorities: str) -> dict:
         raise ValueError(f"At most {MAX_PRIORITIES_CHARS} characters, got {len(text)}. Please shorten them.")
     tmp = PRIORITIES_FILE.with_name(PRIORITIES_FILE.name + ".tmp")
     tmp.write_text(text + "\n" if text else "", encoding="utf-8")
-    tmp.replace(PRIORITIES_FILE)  # an empty file means "cleared", so prompts/interests.md no longer applies
+    tmp.replace(PRIORITIES_FILE)  # atomic
     return {"priorities": text or None}
 
 

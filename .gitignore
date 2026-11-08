@@ -16,6 +16,7 @@ substack_session.json
 substack_session.json.tmp
 stats.jsonl
 subs.txt
+# Former place of the personal interests (now the reading priorities); keeps an old local copy out of the repo
 /prompts/interests.md
 
 # Machine-specific (absolute paths); see README for the snippet

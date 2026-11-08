@@ -1,6 +1,6 @@
 # Substack & RSS Reader MCP
 
-An MCP server that gives Claude and ChatGPT read access to your Substack subscriptions and to RSS/Atom feeds you add. With it, they can list your subscriptions, scan new posts, read full texts (including paid posts you subscribe to), create a news briefing and suggest new publications and feeds.
+An MCP server that gives your AI assistant read access to your Substack subscriptions and to RSS/Atom feeds you add. It works with any assistant that can connect to remote MCP servers, e.g. Claude or ChatGPT; this README calls it "the assistant". With it, the assistant can list your subscriptions, scan new posts, read full texts (including paid posts you subscribe to), create a news briefing and suggest new publications and feeds.
 
 _Not affiliated with or endorsed by Substack._
 
@@ -20,9 +20,9 @@ The button opens Google Cloud Shell with this repository and a step-by-step guid
 | `add_rss` / `remove_rss` | Add a feed (feed URL or website, the feed is found automatically, optionally with a `name`) or remove it                    |
 | `get_user_priorities` / `set_user_priorities` | Your reading priorities in your own words: what matters most to you when selecting and ordering posts |
 | Prompt `news_briefing`   | Ready-made request for a briefing that lists only real, new events                                                          |
-| Prompt `suggest_rss`     | Claude searches the web for feeds that fit your sources and interests and adds the ones you pick                            |
+| Prompt `suggest_rss`     | The assistant searches the web for feeds that fit your sources and priorities and adds the ones you pick                    |
 
-Towards Substack, the server is read-only. Subscribing, liking or commenting is not possible through Claude: for suggestions from `discover_publications`, Claude provides the link and you subscribe on Substack. This way, even a crafted post text cannot trigger an action on your behalf. The only things Claude can change are your feed list (see [RSS feeds](#rss-feeds)) and your reading priorities (see [Reading priorities](#reading-priorities)).
+Towards Substack, the server is read-only. Subscribing, liking or commenting is not possible through the assistant: for suggestions from `discover_publications`, it provides the link and you subscribe on Substack. This way, even a crafted post text cannot trigger an action on your behalf. The only things the assistant can change are your feed list (see [RSS feeds](#rss-feeds)) and your reading priorities (see [Reading priorities](#reading-priorities)).
 
 The Substack endpoints are unofficial and may change. The server throttles Substack to at most 2 requests/s (every other host separately with the same limit), retries on 429/5xx and caches: subscription list, archives and feeds for 15 minutes, recommendations for 1 day, full texts for 7 days. If a publication cannot be loaded, the tools return an entry with `error` for it instead of silently leaving it out. If Substack changes an interface, you notice right away.
 
@@ -151,7 +151,7 @@ _Notes: Only the paywall preview could be read for ChinaTalk "The New Senators o
 
 The criteria and the format of the briefing live in [prompts/](prompts/) and can be adjusted without changing code. Your personal focus areas are your [reading priorities](#reading-priorities).
 
-**The format only applies via the `news_briefing` prompt.** In the Claude app, select it in the chat via the connector in the **+** menu; in Claude Code, use `/mcp__substack-rss-reader__news_briefing`. If you ask freely instead ("What happened in my subscriptions?"), Claude answers in its own format. That is intentional: Claude treats instructions a server sends on its own as third-party content and does not follow them. A prompt, on the other hand, is something you choose yourself. If the format should also apply to free questions, copy the contents of `prompts/briefing_format.md` into the instructions of a claude.ai project and chat in that project.
+**The format only applies via the `news_briefing` prompt.** In the Claude app, select it in the chat via the connector in the **+** menu; in Claude Code, use `/mcp__substack-rss-reader__news_briefing`. If you ask freely instead ("What happened in my subscriptions?"), the assistant answers in its own format. That is intentional: assistants like Claude treat instructions a server sends on its own as third-party content and do not follow them. A prompt, on the other hand, is something you choose yourself. If the format should also apply to free questions, copy the contents of `prompts/briefing_format.md` into the instructions of a claude.ai project and chat in that project.
 
 **ChatGPT does not offer MCP prompts**, only tools. There, create a project and copy `prompts/news_criteria.md` and `prompts/briefing_format.md` into its instructions; then ask in that project, e.g. "Create the briefing for the last 7 days."
 
@@ -160,20 +160,32 @@ The criteria and the format of the briefing live in [prompts/](prompts/) and can
 | `days`      | `7`     | Period in calendar days                                                                                                                 |
 | `focus`     | –       | Optional topical focus, e.g. "AI regulation"                                                                                            |
 | `max_items` | `10`    | Maximum number of items in the main part, the rest goes under "In brief"                                                                |
-| `language`  | –       | Language of the briefing, e.g. "German". If empty, Claude uses your language, not English just because the prompt is written in English |
+| `language`  | –       | Language of the briefing, e.g. "German". If empty, the assistant uses your language, not English just because the prompt is in English |
 
 ## Reading priorities
 
-Tell Claude or ChatGPT what matters most to you, in any language, e.g. "Set my reading priorities: AI regulation and European politics, no sports." They store it with `set_user_priorities` and read it with `get_user_priorities`; to change a part, they read the current text first and write the complete new one.
+Tell the assistant what matters most to you, in any language, e.g. "Set my reading priorities: AI regulation and European politics, no sports." It stores them with `set_user_priorities` and reads them with `get_user_priorities`; to change a part, it reads the current text first and writes the complete new one.
 
 - **Where they apply:** in the `news_briefing` and `suggest_rss` prompts, and on the first page of `get_recent_posts` as `user_priorities`. So they also count for free questions like "What's new?" and in ChatGPT, where there are no prompts.
-- **Storage:** `priorities.md` next to the cache, i.e. in the bucket on Cloud Run. Changes apply right away, without a deploy.
-- **Starting value:** as long as no priorities were set, the server uses `prompts/interests.md` if it exists: copy `prompts/interests.example.md` to `prompts/interests.md` and edit it. It is listed in `.gitignore`, so it stays out of the repository, but it is included when deploying.
+- **Storage:** `priorities.md` next to the cache: in the bucket on Cloud Run, locally next to the script (git-ignored, can also be edited by hand). Changes apply right away, without a deploy.
+- **What works well:** a short list of what is especially important and what matters less, e.g.
+
+  ```
+  Especially important:
+  - AI regulation in the EU and the US
+  - Security incidents that affect companies
+
+  Less important:
+  - Personnel news without strategic significance
+  - Funding rounds below $100M
+  ```
+
+  Without priorities, the assistant weights neutrally.
 - `set_user_priorities` is marked as a write tool, so clients can ask for confirmation, and it accepts at most 4000 characters.
 
 ## RSS feeds
 
-Feeds you add appear in `get_recent_posts` and therefore also in the briefing, marked with `source: "rss"`. Ask Claude, e.g. "Add netzpolitik.org as a feed", or use the `suggest_rss` prompt: it hands Claude your feeds, subscriptions and reading priorities and asks it to search the web, present suggestions and only add the ones you pick.
+Feeds you add appear in `get_recent_posts` and therefore also in the briefing, marked with `source: "rss"`. Ask the assistant, e.g. "Add netzpolitik.org as a feed", or use the `suggest_rss` prompt: it hands the assistant your feeds, subscriptions and reading priorities and asks it to search the web, present suggestions and only add the ones you pick.
 
 - **Feed list:** `feeds.json` next to the cache, i.e. in the bucket on Cloud Run (`/data/feeds.json`). It is plain JSON and can also be edited by hand.
 - **Publication names:** all feeds of one website appear as one publication in `get_recent_posts` (e.g. all tagesschau section feeds as `tagesschau.de`), and articles that appear in several feeds are listed once. The name comes from the feed titles or the domain; to set it yourself, add a `"name"` to the entry in `feeds.json` or call `add_rss` again with `name`.
@@ -379,7 +391,7 @@ Example questions in the app:
 | [substack_mcp.py](substack_mcp.py)         | The server                                                                 |
 | [oauth_server.py](oauth_server.py)         | OAuth login for clients without custom headers (ChatGPT)                   |
 | [setup_page.py](setup_page.py)             | Setup page for connecting Substack                                         |
-| [prompts/](prompts/)                       | News criteria, briefing format, starting value for the reading priorities  |
+| [prompts/](prompts/)                       | News criteria and briefing format                                          |
 | [tutorial.md](tutorial.md)                 | Step-by-step guide shown in Cloud Shell                                    |
 | [Dockerfile](Dockerfile)                   | Image for Cloud Run                                                        |
 | [deploy.sh](deploy.sh)                     | Deployment to Cloud Run                                                    |
