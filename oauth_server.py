@@ -325,7 +325,9 @@ code {{ font-size: .85em; }}
 <body><main><h1>Substack &amp; RSS Reader</h1>{content}</main></body></html>"""
     return HTMLResponse(page, status_code=status, headers={
         "Cache-Control": "no-store",
-        "Referrer-Policy": "no-referrer",
+        # Not "no-referrer": with it, browsers send "Origin: null" on form posts, even to the same site, and the
+        # setup page's origin check rejects them. same-origin still keeps the URL from other sites.
+        "Referrer-Policy": "same-origin",
         "X-Frame-Options": "DENY",
         "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
         **(headers or {}),
