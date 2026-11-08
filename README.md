@@ -140,7 +140,7 @@ _Notes: Only the paywall preview could be read for ChinaTalk "The New Senators o
 
 ## Briefing prompt
 
-The criteria and the format of the briefing live in [prompts/](prompts/) and can be adjusted without changing code. In `prompts/interests.md` you can set personal focus areas (in any language).
+The criteria and the format of the briefing live in [prompts/](prompts/) and can be adjusted without changing code. In `prompts/interests.md` you can set personal focus areas (in any language): copy `prompts/interests.example.md` to `prompts/interests.md` and edit it. The file is listed in `.gitignore`, so your interests stay out of the repository, but it is still included when deploying.
 
 **The format only applies via the `news_briefing` prompt.** In the Claude app, select it in the chat via the connector in the **+** menu; in Claude Code, use `/mcp__substack-reader__news_briefing`. If you ask freely instead ("What happened in my subscriptions?"), Claude answers in its own format. That is intentional: Claude treats instructions a server sends on its own as third-party content and does not follow them. A prompt, on the other hand, is something you choose yourself. If the format should also apply to free questions, copy the contents of `prompts/briefing_format.md` into the instructions of a claude.ai project and chat in that project.
 

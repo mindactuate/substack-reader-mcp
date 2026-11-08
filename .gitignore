@@ -10,6 +10,7 @@ feeds.json
 feeds.json.tmp
 stats.jsonl
 subs.txt
+/prompts/interests.md
 
 # Machine-specific (absolute paths); see README for the snippet
 .mcp.json
