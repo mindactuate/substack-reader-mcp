@@ -11,6 +11,8 @@ Under normal use, the server stays within Cloud Run's free tier: it only runs wh
 
 ## Choose a project
 
+Check the account at the top right first: everything is created in the Google account Cloud Shell runs with. If it is the wrong one, close this tab and open the button again in a private window or a separate browser profile.
+
 Pick or create a project with a billing account. Google requires one for Cloud Run, even within the
 free tier.
 

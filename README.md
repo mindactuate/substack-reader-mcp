@@ -6,9 +6,9 @@ _Not affiliated with or endorsed by Substack._
 
 **Your own server in about 15 minutes, without installing anything:**
 
-[![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.svg)](https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https://github.com/mindactuate/substack-reader-mcp&cloudshell_git_branch=main&cloudshell_tutorial=tutorial.md&show=ide%2Cterminal)
+[![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.svg)](https://accounts.google.com/AccountChooser?continue=https%3A%2F%2Fshell.cloud.google.com%2Fcloudshell%2Feditor%3Fcloudshell_git_repo%3Dhttps%3A%2F%2Fgithub.com%2Fmindactuate%2Fsubstack-reader-mcp%26cloudshell_git_branch%3Dmain%26cloudshell_tutorial%3Dtutorial.md%26show%3Dide%252Cterminal)
 
-The button opens Google Cloud Shell with this repository and a step-by-step guide ([tutorial.md](tutorial.md)). The server is built from the code you see there, in your own Google Cloud project. See [Deploying to GCP](#deploying-to-gcp-cloud-run) for details.
+The button opens Google Cloud Shell with this repository and a step-by-step guide ([tutorial.md](tutorial.md)). The server is built from the code you see there, in your own Google Cloud project. See [Deploying to GCP](#deploying-to-gcp-cloud-run) for details. Signed in to several Google accounts? The button first asks which one to use. If Cloud Shell still opens with the wrong one, open the button in a private window or a separate browser profile.
 
 | Tool / Prompt            | Purpose                                                                                                                     |
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
@@ -277,9 +277,11 @@ Without either `SUBSTACK_SID` or `SUBSTACK_USER`, the server reads the subscript
 
 ### Option A: Open in Cloud Shell (no installation)
 
-[![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.svg)](https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https://github.com/mindactuate/substack-reader-mcp&cloudshell_git_branch=main&cloudshell_tutorial=tutorial.md&show=ide%2Cterminal)
+[![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.svg)](https://accounts.google.com/AccountChooser?continue=https%3A%2F%2Fshell.cloud.google.com%2Fcloudshell%2Feditor%3Fcloudshell_git_repo%3Dhttps%3A%2F%2Fgithub.com%2Fmindactuate%2Fsubstack-reader-mcp%26cloudshell_git_branch%3Dmain%26cloudshell_tutorial%3Dtutorial.md%26show%3Dide%252Cterminal)
 
 Cloud Shell is a terminal in the browser where `gcloud` is already installed and logged in. The button clones the current state of the repository and opens [tutorial.md](tutorial.md) next to it: choose a project, run `./deploy.sh <PROJECT_ID>`, connect Substack on the setup page, add the connector. The image is built from the code in that folder, in your project. Nothing comes from a prebuilt image.
+
+Signed in to several Google accounts? The button first asks which one to use. If Cloud Shell still opens with the wrong one, open the button in a private window or a separate browser profile.
 
 ### Option B: from your computer
 
