@@ -38,7 +38,8 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 # On Windows gcloud is a native program and ends lines with CRLF; the CR would break every comparison
 g() { gcloud --project "$PROJECT" --quiet "$@" | tr -d '\r'; }
 step() { printf '\n==> %s\n' "$*"; }
-retry() { for i in 1 2 3 4 5; do "$@" >/dev/null && return 0; sleep $((i * 3)); done; "$@" >/dev/null; }
+# Retries quietly (e.g. while IAM doesn't know a new service account yet); only the last attempt may show an error
+retry() { for i in 1 2 3 4; do "$@" >/dev/null 2>&1 && return 0; sleep $((i * 3)); done; "$@" >/dev/null; }
 
 # --- Which state is deployed; GitHub may have a newer one (e.g. Cloud Shell reopened an older clone) ---
 if git -C "$DIR" rev-parse --git-dir >/dev/null 2>&1; then
@@ -139,6 +140,25 @@ for s in "${USED_SECRETS[@]}"; do  # new accounts need a few seconds until IAM k
   retry g secrets add-iam-policy-binding "$s" --member="serviceAccount:$SA" --role=roles/secretmanager.secretAccessor
 done
 
+# Since 2024, new projects no longer give Cloud Build's default service account broad rights, so the build
+# fails with "missing required IAM permissions". Which account that is depends on the project's age: ask.
+step "Build service account"
+BUILD_SA="$(g builds get-default-service-account --format='value(serviceAccountEmail)' | sed 's#.*/##')"
+BUILD_GRANTED=0
+if [[ -n "$BUILD_SA" ]]; then
+  if [[ -z "$(g projects get-iam-policy "$PROJECT" --flatten='bindings[].members' \
+        --filter="bindings.role=roles/run.builder AND bindings.members=serviceAccount:$BUILD_SA" \
+        --format='value(bindings.role)')" ]]; then
+    retry g projects add-iam-policy-binding "$PROJECT" --member="serviceAccount:$BUILD_SA" \
+      --role=roles/run.builder --condition=None
+    BUILD_GRANTED=1
+  fi
+  echo "$BUILD_SA may build the image (Cloud Run Builder)."
+else
+  echo "WARNING: could not determine Cloud Build's service account; if the build fails with missing"
+  echo "permissions, grant it the role roles/run.builder."
+fi
+
 step "Cache bucket gs://$BUCKET"
 g storage buckets describe "gs://$BUCKET" >/dev/null 2>&1 \
   || g storage buckets create "gs://$BUCKET" --location="$REGION" --uniform-bucket-level-access \
@@ -146,6 +166,10 @@ g storage buckets describe "gs://$BUCKET" >/dev/null 2>&1 \
 retry g storage buckets add-iam-policy-binding "gs://$BUCKET" --member="serviceAccount:$SA" --role=roles/storage.objectUser
 
 step "Build and deploy (takes a few minutes)"
+if [[ "$BUILD_GRANTED" == 1 ]]; then
+  echo "Waiting a minute until the new build permission applies everywhere..."
+  sleep 60
+fi
 cd "$DIR"
 # OAuth needs the public URL (the discovery metadata names absolute endpoints). It is only known once the
 # service exists, so on the very first deploy it is set afterwards, in a second revision.
