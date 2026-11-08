@@ -210,15 +210,21 @@ g artifacts repositories set-cleanup-policies cloud-run-source-deploy --location
 step "Smoke test"
 CONNECTOR="$BASE/mcp"
 AUTH="Bearer $(g secrets versions access latest --secret="$URL_SECRET")"
-tools="$(printf 'Authorization: %s' "$AUTH" | curl -s -X POST "$CONNECTOR" -H @- \
+# Never abort in here (set -e would end the script silently): the URLs and the token below matter more
+answer="$(printf 'Authorization: %s' "$AUTH" | curl -sS -m 90 -w '\nHTTP %{http_code}' -X POST "$CONNECTOR" -H @- \
   -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
-  -H 'MCP-Protocol-Version: 2025-06-18' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
-  | grep -o '"name":"[a-z_]*"' | sort -u | wc -l)"
-wrong="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CONNECTOR")"
-oauth="$(curl -s -o /dev/null -w '%{http_code}' "$BASE/.well-known/oauth-protected-resource/mcp")"
-setup="$(curl -s -o /dev/null -w '%{http_code}' "$BASE/setup")"
+  -H 'MCP-Protocol-Version: 2025-06-18' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' 2>&1 || true)"
+tools="$(printf '%s' "$answer" | grep -o '"name":"[a-z_]*"' | sort -u | wc -l || true)"
+code() { curl -s -m 30 -o /dev/null -w '%{http_code}' "$@" || true; }
+wrong="$(code -X POST "$CONNECTOR")"
+oauth="$(code "$BASE/.well-known/oauth-protected-resource/mcp")"
+setup="$(code "$BASE/setup")"
 echo "Tools found: $tools (expected 10) · call without token: HTTP $wrong (expected 401)"
 echo "OAuth metadata: HTTP $oauth (expected 200) · setup page: HTTP $setup (expected 200)"
+if [[ "$tools" -lt 10 ]]; then
+  echo "WARNING: the tool list looks wrong. The server answered:"
+  printf '%s\n' "$answer" | tail -c 600
+fi
 
 step "Done"
 echo "Setup page:    $BASE/setup   (connect or renew the Substack login)"
